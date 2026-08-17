@@ -57,12 +57,12 @@ ln -s /Applications "$STAGE/Applications"
 VOLUME_ICON="$STAGE/.VolumeIcon.icns"
 ditto "$ROOT/Assets/AppIcon.icns" "$VOLUME_ICON"
 hdiutil create -volname Pastecap -srcfolder "$STAGE" -ov -format UDZO "$DMG"
-# Enable custom volume icon on the DMG (hasCustomIcon).
+# Enable custom volume icon on the DMG (hasCustomIcon). Skip quietly if attach is blocked (CI/sandbox).
 if command -v SetFile >/dev/null 2>&1; then
-  MOUNT="$(hdiutil attach -readwrite -nobrowse "$DMG" | awk '/\/Volumes\//{print $3; exit}')"
+  MOUNT="$(hdiutil attach -readwrite -nobrowse "$DMG" 2>/dev/null | awk '/\/Volumes\//{print $3; exit}' || true)"
   if [ -n "${MOUNT:-}" ] && [ -f "$MOUNT/.VolumeIcon.icns" ]; then
     SetFile -a C "$MOUNT" || true
-    hdiutil detach "$MOUNT" >/dev/null
+    hdiutil detach "$MOUNT" >/dev/null || true
   fi
 fi
 rm -rf "$STAGE"

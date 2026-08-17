@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build DMG
+        run: scripts/build-dmg.sh
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Pastecap.dmg
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            打开 `Pastecap.dmg`，把 **Pastecap** 拖到 **Applications**。
+
+            当前是 ad-hoc 签名（未做 Apple 公证）。第一次打开若提示无法验证开发者：按住 Control 点图标 → 打开，或到「系统设置 › 隐私与安全性」允许。

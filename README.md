@@ -12,6 +12,17 @@ scripts/run-tests.sh
 scripts/build-dmg.sh   # writes dist/Pastecap.dmg
 ```
 
+## GitHub Release 安装包
+
+推一个 `v` 开头的 tag，GitHub Actions 会编译 `Pastecap.dmg` 并挂到 [Releases](https://github.com/nogeo/Pastecap/releases)：
+
+```sh
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+也可以本机打好后，在 GitHub 仓库的 **Releases → Draft a new release** 里手动上传 `dist/Pastecap.dmg`。
+
 ## Website DMG (Developer ID + notarization)
 
 Local builds are ad-hoc signed. A downloadable DMG needs a paid Apple Developer account:
