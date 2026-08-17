@@ -1,0 +1,7 @@
+.build/
+dist/
+.dmg-staging/
+.DS_Store
+*.swp
+*~
+.cursor/
