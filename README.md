@@ -1,59 +1,99 @@
-# Pastecap
+<p align="center">
+  <img src="Assets/AppIcon-1024.png" width="128" height="128" alt="Pastecap Logo">
+</p>
 
-Native macOS 14+ menu bar clipboard history and screenshot utility.
+<h1 align="center">Pastecap</h1>
 
-Clipboard history and screenshots stay on this Mac. Password managers that mark copies as concealed or transient are not recorded.
+<p align="center">
+  <strong>轻巧纯粹的 macOS 原生剪贴板历史与强大区域截图工具</strong><br>
+  原生 Swift & SwiftUI 构建 · 极速响应 · 数据本地保存 · 深浅色无缝自适应
+</p>
 
-## Build
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-14.0%2B-blue?logo=apple" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Swift-5.9-orange?logo=swift" alt="Swift 5.9">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
+</p>
+
+---
+
+## 📸 应用预览与主要截图
+
+<p align="center">
+  <img src="Assets/AppIcon-1024.png" width="560" alt="Pastecap 主界面预览">
+</p>
+
+---
+
+## ✨ 核心功能亮点
+
+### 📋 1. 现代优雅的剪贴板管理 (Clipboard History)
+- **卡片式精致排版**：自适应深浅色模式（Dark / Light Mode），搭配细腻磨砂玻璃背景与微光悬停质感。
+- **智能内容识别**：
+  - 🔗 **链接识别**：自动标记并以等宽代码字体高亮。
+  - 🎨 **HEX 颜色**：自动解析 `#HEX` 颜色值，并内嵌实时颜色圆点预览。
+  - 📝 **多行文本与代码**：智能显示行数与字符数角标，舒适自然换行排版。
+  - 🖼️ **图片与截图**：高质量居中缩略图，智能标注图片格式与文件大小。
+- **分类筛选胶囊栏**：一键在 `全部`、`文本`、`图片` 之间无缝切换，并支持毫秒级混合关键词搜索。
+- **轻量零抖动复制**：点击整行即刻复制并回车，附带卡片微光脉冲反馈。
+
+---
+
+### ✂️ 2. 像素级微信风格区域截图 (Screen Capture)
+- **自由选区与八向手柄调整**：选区创建后支持拖拽内部整体移动、拖动 8 个控点精细缩放微调。
+- **放大镜与 RGB 取色器**：拖动选区时实时展示 4x 放大镜、选区尺寸与当前像素点的十六进制 HEX 颜色。
+- **丰富标注工具箱**：
+  - 🔲 矩形 / ⭕ 椭圆 / ↗️ 箭头 / ✏️ 自由画笔 / 🏁 像素马赛克 / 🔤 纯净文字标注。
+- **沉浸式文本输入**：无多余边框干扰，支持小号/中号/大号字阶切换，光标颜色与当前选中色实时同步。
+- **快捷键闭环**：`Enter` 一键复制完成并退出，`Esc` 随时取消退出。
+
+---
+
+### 🔒 3. 隐私保护与本地安全
+- **零网络上传**：所有剪贴板历史与图片均保存在本地 `~/Library/Application Support/Pastecap`。
+- **机密数据保护**：1Password、Bitwarden、KeePass 等密码管理器标记为 `Concealed` 或 `Transient` 的敏感复制内容**绝不记录**。
+
+---
+
+## ⌨️ 默认快捷键
+
+| 功能 | 默认快捷键 | 说明 |
+| :--- | :--- | :--- |
+| **打开剪贴板** | <kbd>⇧ Shift</kbd> + <kbd>⌘ Cmd</kbd> + <kbd>V</kbd> | 呼出/隐藏剪贴板主窗口 |
+| **区域截图** | <kbd>⌥ Option</kbd> + <kbd>⌘ Cmd</kbd> + <kbd>A</kbd> | 立即进入全屏选区截图模式 |
+| **完成并复制** | <kbd>↵ Enter</kbd> | 截图完成后复制到剪贴板 |
+| **取消截图** | <kbd>⎋ Esc</kbd> | 退出截图或放弃当前文本输入 |
+
+*(支持在「偏好设置 › 快捷键」中一键自定义修改)*
+
+---
+
+## 📦 编译与打包
 
 ```sh
+# 本地编译调试
 swift build
-scripts/run-tests.sh
-scripts/build-dmg.sh   # writes dist/Pastecap.dmg
+
+# 执行全部自动化测试 (60 项断言)
+./scripts/run-tests.sh
+
+# 构建生成 Release 安装包 (dist/Pastecap.dmg)
+./scripts/build-dmg.sh
 ```
 
-## GitHub Release 安装包
+---
 
-推一个 `v` 开头的 tag，GitHub Actions 会编译 `Pastecap.dmg` 并挂到 [Releases](https://github.com/nogeo/Pastecap/releases)：
+## 🚀 GitHub Release 自动发布
+
+向仓库推送一个 `v*` 格式的 tag，GitHub Actions 会自动编译 `Pastecap.dmg` 并挂载发布到 [Releases](https://github.com/nogeo/Pastecap/releases)：
 
 ```sh
 git tag v1.2.0
 git push origin v1.2.0
 ```
 
-也可以本机打好后，在 GitHub 仓库的 **Releases → Draft a new release** 里手动上传 `dist/Pastecap.dmg`。
+---
 
-## Website DMG (Developer ID + notarization)
+## 🛡️ 屏幕录制权限说明 (Screen Recording)
 
-Local builds are ad-hoc signed. A downloadable DMG needs a paid Apple Developer account:
-
-1. Install a **Developer ID Application** certificate in Keychain.
-2. Store notarization credentials once:
-
-```sh
-xcrun notarytool store-credentials pastecap
-```
-
-3. Build, sign, notarize, and staple:
-
-```sh
-CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
-NOTARY_PROFILE=pastecap \
-scripts/build-dmg.sh
-```
-
-The result is `dist/Pastecap.dmg`. Users drag it to Applications; Gatekeeper accepts a stapled Developer ID signature without disabling SIP or using `xattr`.
-
-Screen Recording permission is tied to the code signature. After switching from ad-hoc to Developer ID, grant the permission once; it should survive later notarized updates that keep the same Team ID.
-
-Default shortcuts: `Shift-Command-V` for clipboard history, `Option-Command-A` for screenshot capture.
-
-Screenshots behave like WeChat's: drag to select, then keep adjusting in place — drag inside the region to move it, drag the 8 handles to resize, drag outside to start over, annotate with the toolbar, `Enter` to copy and finish, `Esc` to cancel. A magnifier with pixel color is shown while selecting/resizing. Picking an annotation tool expands a second toolbar row with stroke colors and thin/medium/thick widths (width maps to font size for text and block size for mosaic); the choice is remembered across screenshots.
-
-## Screen Recording permission
-
-Screenshots require the Screen Recording permission (系统设置 › 隐私与安全性 › 屏幕录制). When the grant is missing or has been invalidated, Pastecap shows an alert with a button that opens that settings pane; after enabling it, relaunch Pastecap for the grant to take effect.
-
-Builds are ad-hoc signed, so macOS may drop the grant after every rebuild or app update. If screenshots stop working after updating, re-enable the permission when the alert appears.
-
-`swift run` is fine for developing clipboard history and hotkeys, but screen capture permission does not behave for the raw executable: TCC attributes the grant to the terminal app and every rebuild changes the binary. Verify screenshots from the built `Pastecap.app` instead.
+截图功能依赖 macOS 系统的**屏幕录制权限**（系统设置 › 隐私与安全性 › 屏幕录制）。首次启动时如遇权限提示，请勾选允许 Pastecap 访问屏幕录制权限。

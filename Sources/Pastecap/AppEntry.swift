@@ -20,11 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let statusImage = NSImage(systemSymbolName: "clipboard.fill", accessibilityDescription: "Pastecap")
-        statusImage?.isTemplate = true
+        let statusImage = Self.makeStatusItemIcon()
         statusItem.button?.image = statusImage
         statusItem.button?.imagePosition = .imageOnly
-        statusItem.button?.toolTip = "Pastecap 剪贴板"
+        statusItem.button?.toolTip = "Pastecap 剪贴板与截图"
         statusItem.button?.target = self
         statusItem.button?.action = #selector(togglePopover)
 
@@ -62,5 +61,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         history.flush()
+    }
+
+    /// 矢量动态绘制 MenuBar 专用图标（18x18 Template 图标：层叠文档 + 右上角剪刀）
+    private static func makeStatusItemIcon() -> NSImage {
+        let size = NSSize(width: 18, height: 18)
+        let img = NSImage(size: size, flipped: false) { rect in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.setAllowsAntialiasing(true)
+            context.setShouldAntialias(true)
+
+            // 1. 底层文档 (Back Document - 偏移在左上方)
+            let backPath = NSBezierPath(roundedRect: NSRect(x: 1.5, y: 4.5, width: 9.5, height: 12.0), xRadius: 1.5, yRadius: 1.5)
+            backPath.lineWidth = 1.2
+            NSColor.black.withAlphaComponent(0.65).setStroke()
+            backPath.stroke()
+
+            // 2. 表层主文档 (Front Document - 主体偏左下，留出右上空间给剪刀)
+            let frontRect = NSRect(x: 4.0, y: 1.5, width: 10.0, height: 12.5)
+            let frontPath = NSBezierPath(roundedRect: frontRect, xRadius: 1.8, yRadius: 1.8)
+
+            // 清理底层重叠部分并描边
+            context.saveGState()
+            context.setBlendMode(.clear)
+            frontPath.fill()
+            context.restoreGState()
+
+            frontPath.lineWidth = 1.3
+            NSColor.black.setStroke()
+            frontPath.stroke()
+
+            // 表层文档内部文本短线 (2 条微细横线)
+            let linePath = NSBezierPath()
+            linePath.move(to: NSPoint(x: 6.5, y: 10.2))
+            linePath.line(to: NSPoint(x: 11.5, y: 10.2))
+            linePath.move(to: NSPoint(x: 6.5, y: 7.4))
+            linePath.line(to: NSPoint(x: 10.0, y: 7.4))
+            linePath.lineWidth = 1.1
+            linePath.lineCapStyle = .round
+            NSColor.black.withAlphaComponent(0.85).setStroke()
+            linePath.stroke()
+
+            // 3. 剪刀图标 (Scissors - 精致裁剪姿态位居右上角)
+            context.saveGState()
+            // 剪刀手柄两环 (双圆环)
+            let upperLoop = NSBezierPath(ovalIn: NSRect(x: 13.8, y: 13.6, width: 3.2, height: 3.2))
+            upperLoop.lineWidth = 1.1
+            upperLoop.stroke()
+
+            let lowerLoop = NSBezierPath(ovalIn: NSRect(x: 14.6, y: 8.8, width: 3.2, height: 3.2))
+            lowerLoop.lineWidth = 1.1
+            lowerLoop.stroke()
+
+            // 交叉刀刃 (两条斜切线)
+            let blades = NSBezierPath()
+            // 刀刃 1：右上连到左下
+            blades.move(to: NSPoint(x: 14.4, y: 14.2))
+            blades.line(to: NSPoint(x: 9.8, y: 9.8))
+            // 刀刃 2：右下连到左上
+            blades.move(to: NSPoint(x: 15.0, y: 11.0))
+            blades.line(to: NSPoint(x: 9.8, y: 13.8))
+            blades.lineWidth = 1.15
+            blades.lineCapStyle = .round
+            blades.stroke()
+
+            // 剪刀中心小转轴铆钉
+            let pivot = NSBezierPath(ovalIn: NSRect(x: 12.2, y: 11.4, width: 1.6, height: 1.6))
+            NSColor.black.setFill()
+            pivot.fill()
+
+            context.restoreGState()
+
+            return true
+        }
+        img.isTemplate = true
+        return img
     }
 }
