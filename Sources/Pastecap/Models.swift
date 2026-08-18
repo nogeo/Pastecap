@@ -9,8 +9,42 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     let kind: ClipboardKind
     let text: String?
     let fileName: String?
+    let displayName: String?
     let createdAt: Date
     let fingerprint: String
+    let byteCount: Int64?
+
+    var listTitle: String {
+        if kind == .image {
+            let size = byteCount.map(Self.compactByteCount)
+            let name = displayName ?? fileName
+            switch (size, name) {
+            case let (size?, name?): return "图片（\(size) \(name)）"
+            case let (size?, nil): return "图片（\(size)）"
+            case let (nil, name?): return "图片（\(name)）"
+            default: return "图片"
+            }
+        }
+        return text ?? ""
+    }
+
+    static func compactByteCount(_ bytes: Int64) -> String {
+        if bytes < 1024 { return "\(bytes)B" }
+        let units = ["K", "M", "G", "T"]
+        var value = Double(bytes)
+        var unit = "B"
+        for next in units {
+            guard value >= 1024 else { break }
+            value /= 1024
+            unit = next
+        }
+        if value < 10 {
+            var text = String(format: "%.1f", value)
+            if text.hasSuffix(".0") { text.removeLast(2) }
+            return text + unit
+        }
+        return "\(Int(value.rounded()))" + unit
+    }
 }
 
 enum PasteboardPolicy {
@@ -78,10 +112,10 @@ final class ClipboardStore: ObservableObject {
     func addText(_ value: String) {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return }
-        add(ClipboardItem(id: UUID(), kind: .text, text: value, fileName: nil, createdAt: Date(), fingerprint: fingerprint(prefix: "text", data: Data(value.utf8))))
+        add(ClipboardItem(id: UUID(), kind: .text, text: value, fileName: nil, displayName: nil, createdAt: Date(), fingerprint: fingerprint(prefix: "text", data: Data(value.utf8)), byteCount: nil))
     }
 
-    func addImage(_ image: NSImage) {
+    func addImage(_ image: NSImage, preferredName: String? = nil) {
         guard let tiff = image.tiffRepresentation else { return }
         pendingImageOps += 1
         ioQueue.async { [weak self] in
@@ -97,6 +131,7 @@ final class ClipboardStore: ObservableObject {
                     return
                 }
                 let name = "\(UUID().uuidString).png"
+                let shownName = Self.imageDisplayName(preferredName)
                 let url = self.directory.appendingPathComponent(name)
                 self.ioQueue.async {
                     try? png.write(to: url, options: .atomic)
@@ -107,7 +142,16 @@ final class ClipboardStore: ObservableObject {
                             return
                         }
                         self.finishImageOp {
-                            self.add(ClipboardItem(id: UUID(), kind: .image, text: nil, fileName: name, createdAt: Date(), fingerprint: fingerprint))
+                            self.add(ClipboardItem(
+                                id: UUID(),
+                                kind: .image,
+                                text: nil,
+                                fileName: name,
+                                displayName: shownName,
+                                createdAt: Date(),
+                                fingerprint: fingerprint,
+                                byteCount: Int64(png.count)
+                            ))
                         }
                     }
                 }
@@ -213,16 +257,34 @@ final class ClipboardStore: ObservableObject {
             if item.fingerprint.hasPrefix("text:") {
                 return item
             }
-            return ClipboardItem(id: item.id, kind: .text, text: text, fileName: nil, createdAt: item.createdAt, fingerprint: fingerprint(prefix: "text", data: Data(text.utf8)))
+            return ClipboardItem(id: item.id, kind: .text, text: text, fileName: nil, displayName: nil, createdAt: item.createdAt, fingerprint: fingerprint(prefix: "text", data: Data(text.utf8)), byteCount: nil)
         }
         guard let fileName = item.fileName else { return nil }
         let url = directory.appendingPathComponent(fileName)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let byteCount = item.byteCount ?? Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        let displayName = item.displayName ?? fileName
         if item.fingerprint.hasPrefix("image:") {
-            return ClipboardItem(id: item.id, kind: .image, text: nil, fileName: fileName, createdAt: item.createdAt, fingerprint: item.fingerprint)
+            if item.byteCount == byteCount, item.displayName != nil { return item }
+            return ClipboardItem(id: item.id, kind: .image, text: nil, fileName: fileName, displayName: displayName, createdAt: item.createdAt, fingerprint: item.fingerprint, byteCount: byteCount)
         }
         guard let data = try? Data(contentsOf: url) else { return nil }
-        return ClipboardItem(id: item.id, kind: .image, text: nil, fileName: fileName, createdAt: item.createdAt, fingerprint: fingerprint(prefix: "image", data: data))
+        return ClipboardItem(id: item.id, kind: .image, text: nil, fileName: fileName, displayName: displayName, createdAt: item.createdAt, fingerprint: fingerprint(prefix: "image", data: data), byteCount: byteCount)
+    }
+
+    private static func imageDisplayName(_ preferred: String?) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        var stem = formatter.string(from: Date())
+        if let preferred, !preferred.isEmpty {
+            let base = URL(fileURLWithPath: preferred).deletingPathExtension().lastPathComponent
+                .replacingOccurrences(of: ":", with: "-")
+                .replacingOccurrences(of: "/", with: "-")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !base.isEmpty { stem = base }
+        }
+        return "\(stem).png"
     }
 
     private func fingerprint(prefix: String, data: Data) -> String {
@@ -364,6 +426,22 @@ final class ClipboardMonitor {
         if board.data(forType: ClipboardStore.internalPasteboardType) != nil { return }
         if PasteboardPolicy.shouldIgnore(board) { return }
         if let text = board.string(forType: .string) { store.addText(text) }
-        else if let image = NSImage(pasteboard: board) { store.addImage(image) }
+        else if let image = NSImage(pasteboard: board) {
+            store.addImage(image, preferredName: Self.suggestedImageName(from: board))
+        }
+    }
+
+    private static func suggestedImageName(from board: NSPasteboard) -> String? {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        if let urls = board.readObjects(forClasses: [NSURL.self], options: options) as? [URL],
+           let name = urls.first?.lastPathComponent,
+           !name.isEmpty {
+            return name
+        }
+        if let string = board.string(forType: .fileURL) {
+            let url = URL(string: string) ?? URL(fileURLWithPath: string)
+            if !url.lastPathComponent.isEmpty { return url.lastPathComponent }
+        }
+        return nil
     }
 }

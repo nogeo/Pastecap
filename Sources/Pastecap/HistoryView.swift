@@ -223,7 +223,7 @@ struct HistoryRow: View, Equatable {
         HStack(spacing: 11) {
             preview
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.kind == .image ? "图片" : (item.text ?? ""))
+                Text(item.listTitle)
                     .font(.system(.body, design: .rounded))
                     .lineLimit(2)
                     .truncationMode(.tail)

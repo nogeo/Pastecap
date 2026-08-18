@@ -386,7 +386,9 @@ final class ScreenshotController: NSObject {
     }
 
     func complete(_ result: NSImage?) {
-        if let result { store.addImage(result) }
+        if let result {
+            store.addImage(result, preferredName: "Screenshot-\(Int(Date().timeIntervalSince1970)).png")
+        }
         closeCaptureWindows()
         finishSession()
     }

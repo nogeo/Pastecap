@@ -94,6 +94,37 @@ private func testImagePersistenceAndDeduplication() throws {
     try expect(store.cacheSizeBytes() < 100, "cache clear did not remove image files")
 }
 
+private func testImageListTitle() throws {
+    let item = ClipboardItem(
+        id: UUID(),
+        kind: .image,
+        text: nil,
+        fileName: "a.png",
+        displayName: "a.png",
+        createdAt: Date(),
+        fingerprint: "image:test",
+        byteCount: 3 * 1024 * 1024
+    )
+    try expect(ClipboardItem.compactByteCount(3 * 1024 * 1024) == "3M", "compact size for 3MB is wrong")
+    try expect(item.listTitle == "图片（3M a.png）", "image list title is wrong")
+}
+
+private func testImagePreferredFileName() throws {
+    let context = try TestContext()
+    defer { context.cleanup() }
+    let store = ClipboardStore(directory: context.directory, defaults: context.defaults)
+    let image = NSImage(size: NSSize(width: 8, height: 8))
+    image.lockFocus()
+    NSColor.systemRed.setFill()
+    NSRect(x: 0, y: 0, width: 8, height: 8).fill()
+    image.unlockFocus()
+    store.addImage(image, preferredName: "a.png")
+    store.flush()
+    try expect(store.items.first?.displayName == "a.png", "preferred image name was not kept")
+    try expect(store.items.first?.listTitle.contains("a.png") == true, "list title is missing the file name")
+    try expect((store.items.first?.byteCount ?? 0) > 0, "image byte count was not recorded")
+}
+
 private func testInternalCopySuppression() throws {
     let context = try TestContext()
     defer { context.cleanup() }
@@ -359,6 +390,8 @@ do {
     try testHistoryPersistence()
     try testLimitAndSettingsPersistence()
     try testImagePersistenceAndDeduplication()
+    try testImageListTitle()
+    try testImagePreferredFileName()
     try testInternalCopySuppression()
     try testSensitivePasteboardIgnored()
     try testScreenshotGeometry()
