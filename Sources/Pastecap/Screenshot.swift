@@ -841,22 +841,26 @@ final class CaptureView: NSView {
     private func beginTextEditing(at point: CGPoint) {
         commitTextEditing()
         textOrigin = point
-        let width = min(240, max(60, bounds.maxX - point.x - 8))
-        let fieldHeight = thickness.fontSize + 10
+        let width = min(280, max(80, bounds.maxX - point.x - 8))
+        let fieldHeight = thickness.fontSize + 14
         let field = NSTextField(frame: CGRect(x: point.x, y: point.y - 4, width: width, height: fieldHeight))
         field.font = NSFont.systemFont(ofSize: thickness.fontSize, weight: .semibold)
         field.textColor = strokeColor
-        field.backgroundColor = NSColor.black.withAlphaComponent(0.35)
-        field.drawsBackground = true
+        field.drawsBackground = false
         field.isBordered = false
         field.focusRingType = .none
-        field.placeholderString = "输入文字"
         field.target = self
         field.action = #selector(commitTextEditing)
         field.delegate = self
         addSubview(field)
         textField = field
         window?.makeFirstResponder(field)
+        if let editor = window?.fieldEditor(true, for: field) as? NSTextView {
+            editor.insertionPointColor = strokeColor
+            editor.textColor = strokeColor
+            editor.font = NSFont.systemFont(ofSize: thickness.fontSize, weight: .semibold)
+            editor.drawsBackground = false
+        }
     }
 
     @objc private func commitTextEditing() {
@@ -1027,6 +1031,14 @@ final class CaptureView: NSView {
         guard let field = textField else { return }
         field.textColor = strokeColor
         field.font = NSFont.systemFont(ofSize: thickness.fontSize, weight: .semibold)
+        let fieldHeight = thickness.fontSize + 14
+        field.frame.size.height = fieldHeight
+        if let editor = window?.fieldEditor(false, for: field) as? NSTextView {
+            editor.insertionPointColor = strokeColor
+            editor.textColor = strokeColor
+            editor.font = NSFont.systemFont(ofSize: thickness.fontSize, weight: .semibold)
+            editor.setSelectedRange(editor.selectedRange())
+        }
     }
 
     private func refreshAnnotationOptions() {
@@ -1037,10 +1049,36 @@ final class CaptureView: NSView {
         for (index, button) in colorButtons.enumerated() {
             button.image = swatchImage(for: AnnotationStyle.palette[index], selected: index == strokeColorIndex)
         }
+        let isTextTool = activeTool == .text
         for level in AnnotationThickness.allCases {
             guard level.rawValue < thicknessButtons.count else { continue }
-            thicknessButtons[level.rawValue].image = thicknessImage(for: level, color: strokeColor, selected: level == thickness)
+            let btn = thicknessButtons[level.rawValue]
+            btn.toolTip = isTextTool ? (level == .thin ? "小号字" : (level == .medium ? "中号字" : "大号字")) : (level == .thin ? "细" : (level == .medium ? "中" : "粗"))
+            btn.image = isTextTool ?
+                textSizeImage(for: level, color: strokeColor, selected: level == thickness) :
+                thicknessImage(for: level, color: strokeColor, selected: level == thickness)
         }
+    }
+
+    private func textSizeImage(for level: AnnotationThickness, color: NSColor, selected: Bool) -> NSImage {
+        let side: CGFloat = 26
+        let image = NSImage(size: NSSize(width: side, height: side))
+        image.lockFocus()
+        let fontSizes: [CGFloat] = [10, 13, 16]
+        let font = NSFont.systemFont(ofSize: fontSizes[level.rawValue], weight: .bold)
+        let str = "A" as NSString
+        let attr: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+        let size = str.size(withAttributes: attr)
+        let rect = CGRect(x: (side - size.width) / 2, y: (side - size.height) / 2, width: size.width, height: size.height)
+        str.draw(in: rect, withAttributes: attr)
+        if selected {
+            selectionRingColor(for: color).setStroke()
+            let ring = NSBezierPath(ovalIn: CGRect(x: 1.5, y: 1.5, width: side - 3, height: side - 3))
+            ring.lineWidth = 1.5
+            ring.stroke()
+        }
+        image.unlockFocus()
+        return image
     }
 
     private func selectionRingColor(for color: NSColor) -> NSColor {
