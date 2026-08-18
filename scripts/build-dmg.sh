@@ -7,6 +7,12 @@ DMG="$ROOT/dist/Pastecap.dmg"
 STAGE="$ROOT/.dmg-staging"
 ENTITLEMENTS="$ROOT/Packaging/Pastecap.entitlements"
 IDENTITY="${CODESIGN_IDENTITY:--}"
+
+# 从 git 提取当前最近的 tag 版本号（例如 v1.2.0 -> 1.2.0），如果无 tag 则 fallback 到 1.0.0
+RAW_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")"
+VERSION="${RAW_TAG#v}"
+COMMITS_COUNT="$(git rev-list --count HEAD 2>/dev/null || echo "1")"
+
 rm -rf "$ROOT/dist"
 rm -rf "$STAGE"
 mkdir -p "$ROOT/dist" "$APP/Contents/MacOS" "$APP/Contents/Resources" "$STAGE"
@@ -16,7 +22,7 @@ ditto "$BUILD/Pastecap" "$APP/Contents/MacOS/Pastecap"
 ditto "$ROOT/Assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 ditto "$ROOT/Packaging/PrivacyInfo.xcprivacy" "$APP/Contents/Resources/PrivacyInfo.xcprivacy"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -31,8 +37,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
-	<key>CFBundleVersion</key><string>7</string>
-	<key>CFBundleShortVersionString</key><string>1.2.0</string>
+	<key>CFBundleVersion</key><string>$COMMITS_COUNT</string>
+	<key>CFBundleShortVersionString</key><string>$VERSION</string>
 	<key>NSScreenCaptureUsageDescription</key><string>Pastecap 需要屏幕录制权限来截取选定区域。</string>
 </dict></plist>
 PLIST
