@@ -45,6 +45,74 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         }
         return "\(Int(value.rounded()))" + unit
     }
+
+    var isURL: Bool {
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return false }
+        guard text.hasPrefix("http://") || text.hasPrefix("https://") else { return false }
+        return URL(string: text)?.host != nil
+    }
+
+    var hexColor: NSColor? {
+        guard let raw = text?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        var str = raw
+        if str.hasPrefix("#") { str.removeFirst() }
+        let len = str.count
+        guard len == 3 || len == 6 || len == 8 else { return nil }
+        guard let intVal = UInt64(str, radix: 16) else { return nil }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
+        if len == 3 {
+            r = CGFloat((intVal >> 8) & 0xF) / 15.0
+            g = CGFloat((intVal >> 4) & 0xF) / 15.0
+            b = CGFloat(intVal & 0xF) / 15.0
+        } else if len == 6 {
+            r = CGFloat((intVal >> 16) & 0xFF) / 255.0
+            g = CGFloat((intVal >> 8) & 0xFF) / 255.0
+            b = CGFloat(intVal & 0xFF) / 255.0
+        } else if len == 8 {
+            r = CGFloat((intVal >> 24) & 0xFF) / 255.0
+            g = CGFloat((intVal >> 16) & 0xFF) / 255.0
+            b = CGFloat((intVal >> 8) & 0xFF) / 255.0
+            a = CGFloat(intVal & 0xFF) / 255.0
+        }
+        return NSColor(calibratedRed: r, green: g, blue: b, alpha: a)
+    }
+
+    var isMultiline: Bool {
+        guard let text else { return false }
+        return text.contains("\n") || text.contains("\r")
+    }
+
+    var lineCount: Int {
+        guard let text else { return 0 }
+        let lines = text.split(whereSeparator: \.isNewline)
+        return max(1, lines.count)
+    }
+
+    var characterCount: Int {
+        text?.count ?? 0
+    }
+
+    var previewSnippet: String {
+        guard let text else { return "" }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed
+    }
+
+    var relativeTimeString: String {
+        let now = Date()
+        let diff = now.timeIntervalSince(createdAt)
+        if diff < 60 { return "刚刚" }
+        if diff < 3600 { return "\(Int(diff / 60))分钟前" }
+        if diff < 86400 { return "\(Int(diff / 3600))小时前" }
+        if Calendar.current.isDateInYesterday(createdAt) {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "昨天 HH:mm"
+            return formatter.string(from: createdAt)
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd HH:mm"
+        return formatter.string(from: createdAt)
+    }
 }
 
 enum PasteboardPolicy {
@@ -250,6 +318,7 @@ final class ClipboardStore: ObservableObject {
     private func invalidateThumbnail(for item: ClipboardItem) {
         guard let name = item.fileName else { return }
         thumbnailCache.removeObject(forKey: "\(name)-54x44" as NSString)
+        thumbnailCache.removeObject(forKey: "\(name)-52x42" as NSString)
     }
 
     private func migratedItem(_ item: ClipboardItem) -> ClipboardItem? {

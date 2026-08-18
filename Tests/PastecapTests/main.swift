@@ -377,6 +377,45 @@ private func testAnnotationRendering() throws {
     try expect(thickInk > thinInk, "thickness setting did not change the rendered stroke width")
 }
 
+private func testSmartItemDetection() throws {
+    let urlItem = ClipboardItem(
+        id: UUID(),
+        kind: .text,
+        text: "https://github.com/nogeo/Pastecap",
+        fileName: nil,
+        displayName: nil,
+        createdAt: Date(),
+        fingerprint: "text:url",
+        byteCount: nil
+    )
+    try expect(urlItem.isURL, "failed to detect valid URL")
+
+    let colorItem = ClipboardItem(
+        id: UUID(),
+        kind: .text,
+        text: "#FF5733",
+        fileName: nil,
+        displayName: nil,
+        createdAt: Date(),
+        fingerprint: "text:color",
+        byteCount: nil
+    )
+    try expect(colorItem.hexColor != nil, "failed to parse valid hex color")
+
+    let multilineItem = ClipboardItem(
+        id: UUID(),
+        kind: .text,
+        text: "Line 1\nLine 2\nLine 3",
+        fileName: nil,
+        displayName: nil,
+        createdAt: Date(),
+        fingerprint: "text:multi",
+        byteCount: nil
+    )
+    try expect(multilineItem.isMultiline, "failed to detect multiline text")
+    try expect(multilineItem.lineCount == 3, "line count mismatch")
+}
+
 private func testSupportDirectoryName() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("PastecapSupport-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -401,6 +440,7 @@ do {
     try testHotKeySettings()
     try testAnnotationRendering()
     try testSupportDirectoryName()
+    try testSmartItemDetection()
     print("PASS: \(passed) assertions")
 } catch {
     fputs("FAIL: \(error)\n", stderr)
