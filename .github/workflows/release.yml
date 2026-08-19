@@ -24,4 +24,11 @@ jobs:
           body: |
             打开 `Pastecap.dmg`，把 **Pastecap** 拖到 **Applications**。
 
-            当前是 ad-hoc 签名（未做 Apple 公证）。第一次打开若提示无法验证开发者：按住 Control 点图标 → 打开，或到「系统设置 › 隐私与安全性」允许。
+            ### 安装要求
+
+            - macOS 14.0（Sonoma）或更高版本。
+            - 当前附件为 Apple Silicon（`arm64`）构建，适用于 M1 及更新的 Apple 芯片 Mac；Intel Mac 暂无预编译安装包。
+            - 区域截图首次使用需要在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 Pastecap；剪贴板历史无需该权限。
+            - 不需要网络连接或账号，数据保存在本机。
+
+            当前安装包使用 ad-hoc 签名（未经过 Apple 公证）。第一次打开若提示“无法验证开发者”：按住 Control 点图标 →「打开」，或到「系统设置 › 隐私与安全性」允许打开。
