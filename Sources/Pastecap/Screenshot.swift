@@ -785,19 +785,28 @@ final class CaptureView: NSView {
     }
 
     private func resizedSelection(from start: CGRect, handle: Handle, to point: CGPoint) -> CGRect {
-        let minX = min(point.x, start.maxX - 2)
-        let minY = min(point.y, start.maxY - 2)
-        let maxX = max(point.x, start.minX + 2)
-        let maxY = max(point.y, start.minY + 2)
+        let newMinX = min(point.x, start.maxX - 2)
+        let newMaxX = max(point.x, start.minX + 2)
+        let newMinY = min(point.y, start.maxY - 2)
+        let newMaxY = max(point.y, start.minY + 2)
+
         switch handle {
-        case .topLeft: return CGRect(x: minX, y: minY, width: start.maxX - minX, height: start.maxY - minY)
-        case .top: return CGRect(x: start.minX, y: minY, width: start.width, height: start.maxY - minY)
-        case .topRight: return CGRect(x: start.minX, y: minY, width: maxX - start.minX, height: start.maxY - minY)
-        case .right: return CGRect(x: start.minX, y: start.minY, width: maxX - start.minX, height: start.height)
-        case .bottomRight: return CGRect(x: start.minX, y: start.minY, width: maxX - start.minX, height: maxY - start.minY)
-        case .bottom: return CGRect(x: start.minX, y: start.minY, width: start.width, height: maxY - start.minY)
-        case .bottomLeft: return CGRect(x: minX, y: start.minY, width: start.maxX - minX, height: maxY - start.minY)
-        case .left: return CGRect(x: minX, y: start.minY, width: start.maxX - minX, height: start.height)
+        case .topLeft:
+            return CGRect(x: newMinX, y: start.minY, width: start.maxX - newMinX, height: newMaxY - start.minY)
+        case .top:
+            return CGRect(x: start.minX, y: start.minY, width: start.width, height: newMaxY - start.minY)
+        case .topRight:
+            return CGRect(x: start.minX, y: start.minY, width: newMaxX - start.minX, height: newMaxY - start.minY)
+        case .right:
+            return CGRect(x: start.minX, y: start.minY, width: newMaxX - start.minX, height: start.height)
+        case .bottomRight:
+            return CGRect(x: start.minX, y: newMinY, width: newMaxX - start.minX, height: start.maxY - newMinY)
+        case .bottom:
+            return CGRect(x: start.minX, y: newMinY, width: start.width, height: start.maxY - newMinY)
+        case .bottomLeft:
+            return CGRect(x: newMinX, y: newMinY, width: start.maxX - newMinX, height: start.maxY - newMinY)
+        case .left:
+            return CGRect(x: newMinX, y: start.minY, width: start.maxX - newMinX, height: start.height)
         }
     }
 
@@ -815,7 +824,7 @@ final class CaptureView: NSView {
     }
 
     private func hitHandle(_ point: CGPoint) -> Handle? {
-        for (handle, center) in handlePoints where hypot(point.x - center.x, point.y - center.y) <= 10 {
+        for (handle, center) in handlePoints where hypot(point.x - center.x, point.y - center.y) <= 12 {
             return handle
         }
         return nil
