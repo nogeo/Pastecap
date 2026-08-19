@@ -548,7 +548,7 @@ final class CaptureView: NSView {
     private var toolButtons: [NSButton] = []
     private lazy var toolbar: NSView = makeToolbar()
     private var toolbarSize: NSSize {
-        NSSize(width: 366, height: activeTool == nil ? 44 : 72)
+        NSSize(width: 472, height: activeTool == nil ? 50 : 86)
     }
     private var strokeColorIndex: Int
     private var strokeColor: NSColor { AnnotationStyle.palette[strokeColorIndex] }
@@ -672,11 +672,52 @@ final class CaptureView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if textField != nil {
+            super.keyDown(with: event)
+            return
+        }
+
+        let isCmd = event.modifierFlags.contains(.command)
+        let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+        if isCmd {
+            if chars == "z" {
+                if !annotations.isEmpty { annotations.removeLast() }
+                needsDisplay = true
+                return
+            } else if chars == "s" {
+                confirmSave()
+                return
+            } else if chars == "c" {
+                confirmCopy()
+                return
+            }
+        } else {
+            switch chars {
+            case "r": selectTool(.rectangle); return
+            case "o": selectTool(.ellipse); return
+            case "a": selectTool(.arrow); return
+            case "p": selectTool(.pen); return
+            case "m": selectTool(.mosaic); return
+            case "t": selectTool(.text); return
+            default: break
+            }
+        }
+
         switch event.keyCode {
         case 36, 76: confirmCopy()
         case 53: controller?.cancel()
         default: super.keyDown(with: event)
         }
+    }
+
+    private func selectTool(_ tool: AnnotationTool) {
+        guard phase == .editing else { return }
+        activeTool = activeTool == tool ? nil : tool
+        refreshToolButtons()
+        refreshAnnotationOptions()
+        updateToolbarFrame()
+        needsDisplay = true
     }
 
     // MARK: Interaction helpers
@@ -780,7 +821,18 @@ final class CaptureView: NSView {
         return nil
     }
 
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if toolbar.superview != nil {
+            addCursorRect(toolbar.frame, cursor: .arrow)
+        }
+    }
+
     private func updateCursor(_ point: CGPoint) {
+        if toolbar.superview != nil, toolbar.frame.contains(point) {
+            NSCursor.arrow.set()
+            return
+        }
         switch phase {
         case .idle, .dragging:
             NSCursor.crosshair.set()
@@ -909,54 +961,96 @@ final class CaptureView: NSView {
     private func makeToolbar() -> NSView {
         let container = NSVisualEffectView()
         container.material = .popover
-        container.blendingMode = .behindWindow
+        container.blendingMode = .withinWindow
         container.state = .active
         container.wantsLayer = true
-        container.layer?.cornerRadius = 8
+        container.layer?.cornerRadius = 14
+        container.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.92).cgColor
+        container.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+        container.layer?.borderWidth = 0.5
+        container.layer?.shadowColor = NSColor.black.withAlphaComponent(0.24).cgColor
+        container.layer?.shadowOpacity = 1
+        container.layer?.shadowRadius = 12
+        container.layer?.shadowOffset = CGSize(width: 0, height: -4)
 
-        let symbols = [
-            AnnotationTool.rectangle.symbolName,
-            AnnotationTool.ellipse.symbolName,
-            AnnotationTool.arrow.symbolName,
-            AnnotationTool.pen.symbolName,
-            AnnotationTool.mosaic.symbolName,
-            AnnotationTool.text.symbolName,
-            "arrow.uturn.backward",
-            "xmark",
-            "square.and.arrow.down",
-            "checkmark.circle.fill"
+        struct ToolbarItemDef {
+            let symbol: String
+            let tip: String
+            let tag: Int
+            let isTool: Bool
+            let tintColor: NSColor?
+        }
+
+        let toolItems: [ToolbarItemDef] = [
+            ToolbarItemDef(symbol: AnnotationTool.rectangle.symbolName, tip: "矩形 (R)", tag: 0, isTool: true, tintColor: nil),
+            ToolbarItemDef(symbol: AnnotationTool.ellipse.symbolName, tip: "椭圆 (O)", tag: 1, isTool: true, tintColor: nil),
+            ToolbarItemDef(symbol: AnnotationTool.arrow.symbolName, tip: "箭头 (A)", tag: 2, isTool: true, tintColor: nil),
+            ToolbarItemDef(symbol: AnnotationTool.pen.symbolName, tip: "画笔 (P)", tag: 3, isTool: true, tintColor: nil),
+            ToolbarItemDef(symbol: AnnotationTool.mosaic.symbolName, tip: "马赛克 (M)", tag: 4, isTool: true, tintColor: nil),
+            ToolbarItemDef(symbol: AnnotationTool.text.symbolName, tip: "文字 (T)", tag: 5, isTool: true, tintColor: nil)
         ]
-        let tips = ["矩形", "椭圆", "箭头", "画笔", "马赛克", "文字", "撤销", "取消", "保存到文件", "复制并完成"]
+
+        let actionItems: [ToolbarItemDef] = [
+            ToolbarItemDef(symbol: "arrow.uturn.backward", tip: "撤销 (⌘Z)", tag: 10, isTool: false, tintColor: nil),
+            ToolbarItemDef(symbol: "square.and.arrow.down", tip: "保存到文件 (⌘S)", tag: 12, isTool: false, tintColor: nil)
+        ]
+
+        let exitItems: [ToolbarItemDef] = [
+            ToolbarItemDef(symbol: "xmark", tip: "取消截图 (Esc)", tag: 11, isTool: false, tintColor: .systemRed),
+            ToolbarItemDef(symbol: "checkmark.circle.fill", tip: "完成并复制 (Enter)", tag: 13, isTool: false, tintColor: .systemGreen)
+        ]
+
+        let config = NSImage.SymbolConfiguration(pointSize: 14.5, weight: .medium)
+
+        func makeButton(for def: ToolbarItemDef) -> NSButton {
+            let baseImg = NSImage(systemSymbolName: def.symbol, accessibilityDescription: def.tip) ?? NSImage(size: NSSize(width: 16, height: 16))
+            let icon = baseImg.withSymbolConfiguration(config) ?? baseImg
+            let button = NSButton(image: icon, target: self, action: #selector(toolbarAction(_:)))
+            button.tag = def.tag
+            button.toolTip = def.tip
+            button.bezelStyle = .texturedRounded
+            button.isBordered = false
+            button.imageScaling = .scaleProportionallyDown
+            button.contentTintColor = def.tintColor ?? .labelColor
+            button.widthAnchor.constraint(equalToConstant: 34).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 34).isActive = true
+            button.wantsLayer = true
+            button.layer?.cornerRadius = 7
+            if def.isTool {
+                button.setButtonType(.toggle)
+                toolButtons.append(button)
+            }
+            return button
+        }
+
+        func makeDivider() -> NSView {
+            let divider = NSView()
+            divider.wantsLayer = true
+            divider.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+            divider.widthAnchor.constraint(equalToConstant: 1).isActive = true
+            divider.heightAnchor.constraint(equalToConstant: 20).isActive = true
+            return divider
+        }
+
         let stack = NSStackView()
         stack.orientation = .horizontal
-        stack.spacing = 3
-        stack.edgeInsets = NSEdgeInsets(top: 5, left: 7, bottom: 5, right: 7)
-        for (index, symbol) in symbols.enumerated() {
-            let icon = NSImage(systemSymbolName: symbol, accessibilityDescription: tips[index]) ?? NSImage(size: NSSize(width: 16, height: 16))
-            let button = NSButton(image: icon, target: self, action: #selector(toolbarAction(_:)))
-            button.tag = index < 6 ? index : index + 4
-            button.toolTip = tips[index]
-            button.bezelStyle = .texturedRounded
-            button.contentTintColor = index == 7 ? .systemRed : (index >= 8 ? .systemBlue : .labelColor)
-            button.widthAnchor.constraint(equalToConstant: 32).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 32).isActive = true
-            if index < 6 {
-                button.setButtonType(.toggle)
-                button.isBordered = false
-                button.wantsLayer = true
-                button.layer?.cornerRadius = 6
-                toolButtons.append(button)
-            } else {
-                button.isBordered = false
-            }
-            stack.addArrangedSubview(button)
-        }
+        stack.spacing = 4
+        stack.alignment = .centerY
+        stack.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
+
+        toolItems.forEach { stack.addArrangedSubview(makeButton(for: $0)) }
+        stack.addArrangedSubview(makeDivider())
+        actionItems.forEach { stack.addArrangedSubview(makeButton(for: $0)) }
+        stack.addArrangedSubview(makeDivider())
+        exitItems.forEach { stack.addArrangedSubview(makeButton(for: $0)) }
+
         refreshToolButtons()
         stack.translatesAutoresizingMaskIntoConstraints = false
         optionsRow.isHidden = true
+
         let rows = NSStackView()
         rows.orientation = .vertical
-        rows.spacing = 2
+        rows.spacing = 4
         rows.alignment = .centerX
         rows.addArrangedSubview(stack)
         rows.addArrangedSubview(optionsRow)
@@ -976,7 +1070,8 @@ final class CaptureView: NSView {
         let row = NSStackView()
         row.orientation = .horizontal
         row.spacing = 6
-        row.edgeInsets = NSEdgeInsets(top: 0, left: 7, bottom: 0, right: 7)
+        row.alignment = .centerY
+        row.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 6, right: 10)
 
         let colorTips = ["红色", "橙色", "黄色", "绿色", "蓝色", "黑色", "白色"]
         for (index, _) in AnnotationStyle.palette.enumerated() {
@@ -992,9 +1087,9 @@ final class CaptureView: NSView {
 
         let divider = NSView()
         divider.wantsLayer = true
-        divider.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.15).cgColor
+        divider.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
         divider.widthAnchor.constraint(equalToConstant: 1).isActive = true
-        divider.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        divider.heightAnchor.constraint(equalToConstant: 16).isActive = true
         colorDivider = divider
         row.addArrangedSubview(divider)
 
@@ -1064,7 +1159,7 @@ final class CaptureView: NSView {
         let side: CGFloat = 26
         let image = NSImage(size: NSSize(width: side, height: side))
         image.lockFocus()
-        let fontSizes: [CGFloat] = [10, 13, 16]
+        let fontSizes: [CGFloat] = [9.5, 12, 14.5]
         let font = NSFont.systemFont(ofSize: fontSizes[level.rawValue], weight: .bold)
         let str = "A" as NSString
         let attr: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
@@ -1090,7 +1185,7 @@ final class CaptureView: NSView {
         let side: CGFloat = 26
         let image = NSImage(size: NSSize(width: side, height: side))
         image.lockFocus()
-        let diameter: CGFloat = selected ? 20 : 16
+        let diameter: CGFloat = selected ? 18 : 14
         let dot = NSBezierPath(ovalIn: CGRect(x: (side - diameter) / 2, y: (side - diameter) / 2, width: diameter, height: diameter))
         color.setFill()
         NSColor.black.withAlphaComponent(0.18).setStroke()
@@ -1111,7 +1206,7 @@ final class CaptureView: NSView {
         let side: CGFloat = 26
         let image = NSImage(size: NSSize(width: side, height: side))
         image.lockFocus()
-        let diameters: [CGFloat] = [6, 10, 16]
+        let diameters: [CGFloat] = [5, 9, 14]
         let diameter = diameters[level.rawValue]
         let dot = NSBezierPath(ovalIn: CGRect(x: (side - diameter) / 2, y: (side - diameter) / 2, width: diameter, height: diameter))
         color.setFill()
@@ -1171,7 +1266,7 @@ final class CaptureView: NSView {
             }
             NSGraphicsContext.restoreGraphicsState()
 
-            NSColor.systemBlue.setStroke()
+            NSColor.systemGreen.setStroke()
             let border = NSBezierPath(rect: selection)
             border.lineWidth = 1.5
             border.stroke()
@@ -1200,7 +1295,7 @@ final class CaptureView: NSView {
             let dot = NSBezierPath(ovalIn: CGRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8))
             NSColor.white.setFill()
             dot.fill()
-            NSColor.systemBlue.setStroke()
+            NSColor.systemGreen.setStroke()
             dot.lineWidth = 1
             dot.stroke()
         }
