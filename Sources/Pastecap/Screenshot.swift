@@ -848,9 +848,14 @@ final class CaptureView: NSView {
         case .editing:
             if let handle = hitHandle(point) {
                 switch handle {
-                case .top, .bottom: NSCursor.resizeUpDown.set()
-                case .left, .right: NSCursor.resizeLeftRight.set()
-                default: NSCursor.crosshair.set()
+                case .top, .bottom:
+                    NSCursor.resizeUpDown.set()
+                case .left, .right:
+                    NSCursor.resizeLeftRight.set()
+                case .topLeft, .bottomRight:
+                    NSCursor.resizeNorthWestSouthEast.set()
+                case .topRight, .bottomLeft:
+                    NSCursor.resizeNorthEastSouthWest.set()
                 }
             } else if selection.contains(point) {
                 if activeTool == nil { NSCursor.openHand.set() } else { NSCursor.crosshair.set() }
@@ -1401,5 +1406,61 @@ extension CaptureView: NSTextFieldDelegate {
         default:
             return false
         }
+    }
+}
+
+// MARK: - Diagonal Resize Cursors
+
+private extension NSCursor {
+    static let resizeNorthWestSouthEast: NSCursor = {
+        let sel = Selector(("_windowResizeNorthWestSouthEastCursor"))
+        if NSCursor.responds(to: sel), let cursor = NSCursor.perform(sel)?.takeUnretainedValue() as? NSCursor {
+            return cursor
+        }
+        return makeDiagonalCursor(isNorthWestToSouthEast: true)
+    }()
+
+    static let resizeNorthEastSouthWest: NSCursor = {
+        let sel = Selector(("_windowResizeNorthEastSouthWestCursor"))
+        if NSCursor.responds(to: sel), let cursor = NSCursor.perform(sel)?.takeUnretainedValue() as? NSCursor {
+            return cursor
+        }
+        return makeDiagonalCursor(isNorthWestToSouthEast: false)
+    }()
+
+    private static func makeDiagonalCursor(isNorthWestToSouthEast: Bool) -> NSCursor {
+        let size = NSSize(width: 18, height: 18)
+        let img = NSImage(size: size, flipped: false) { _ in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.saveGState()
+            context.translateBy(x: 9, y: 9)
+            context.rotate(by: (isNorthWestToSouthEast ? 45.0 : -45.0) * .pi / 180.0)
+            context.translateBy(x: -9, y: -9)
+
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: 9, y: 17))
+            path.line(to: NSPoint(x: 5, y: 12))
+            path.line(to: NSPoint(x: 7.5, y: 12))
+            path.line(to: NSPoint(x: 7.5, y: 6))
+            path.line(to: NSPoint(x: 5, y: 6))
+            path.line(to: NSPoint(x: 9, y: 1))
+            path.line(to: NSPoint(x: 13, y: 6))
+            path.line(to: NSPoint(x: 10.5, y: 6))
+            path.line(to: NSPoint(x: 10.5, y: 12))
+            path.line(to: NSPoint(x: 13, y: 12))
+            path.close()
+
+            NSColor.black.setStroke()
+            path.lineWidth = 2.4
+            path.lineJoinStyle = .round
+            path.stroke()
+
+            NSColor.white.setFill()
+            path.fill()
+
+            context.restoreGState()
+            return true
+        }
+        return NSCursor(image: img, hotSpot: NSPoint(x: 9, y: 9))
     }
 }
