@@ -289,6 +289,7 @@ final class ScreenshotController: NSObject {
     private var cursorIsPushed = false
     private var isPreparing = false
     private var snapshots: [CGDirectDisplayID: ScreenSnapshot] = [:]
+    private var pinnedWindows: [PinnedScreenshotWindow] = []
 
     init(store: ClipboardStore) {
         self.store = store
@@ -389,6 +390,19 @@ final class ScreenshotController: NSObject {
         if let result {
             store.addImage(result, preferredName: "Screenshot-\(Int(Date().timeIntervalSince1970)).png")
         }
+        closeCaptureWindows()
+        finishSession()
+    }
+
+    func pin(_ result: NSImage, at screenRect: CGRect) {
+        store.addImage(result, preferredName: "Screenshot-\(Int(Date().timeIntervalSince1970)).png")
+        let pinWin = PinnedScreenshotWindow(image: result, screenRect: screenRect)
+        pinWin.onClose = { [weak self, weak pinWin] in
+            guard let self, let pinWin else { return }
+            self.pinnedWindows.removeAll { $0 === pinWin }
+        }
+        pinnedWindows.append(pinWin)
+        pinWin.orderFrontRegardless()
         closeCaptureWindows()
         finishSession()
     }
@@ -520,6 +534,109 @@ final class CaptureWindow: NSWindow {
     }
 }
 
+// MARK: - Pinned Screenshot Window (贴图 / 悬浮置顶窗口)
+
+final class PinnedScreenshotWindow: NSPanel {
+    var onClose: (() -> Void)?
+
+    init(image: NSImage, screenRect: CGRect) {
+        super.init(
+            contentRect: screenRect,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        isFloatingPanel = true
+        level = .floating
+        isMovableByWindowBackground = true
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        hasShadow = true
+        backgroundColor = .clear
+        isOpaque = false
+
+        contentView = PinnedScreenshotView(image: image, window: self)
+    }
+
+    override var canBecomeKey: Bool { true }
+
+    override func cancelOperation(_ sender: Any?) {
+        closeAndNotify()
+    }
+
+    func closeAndNotify() {
+        onClose?()
+        close()
+    }
+}
+
+final class PinnedScreenshotView: NSView {
+    private let image: NSImage
+    private weak var panel: PinnedScreenshotWindow?
+
+    init(image: NSImage, window: PinnedScreenshotWindow) {
+        self.image = image
+        self.panel = window
+        super.init(frame: NSRect(origin: .zero, size: image.size))
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        let path = NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4)
+        path.addClip()
+        image.draw(in: bounds)
+        NSGraphicsContext.restoreGraphicsState()
+
+        NSColor.black.withAlphaComponent(0.14).setStroke()
+        let border = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+        border.lineWidth = 1
+        border.stroke()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if event.clickCount == 2 {
+            panel?.closeAndNotify()
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "复制图片", action: #selector(copyImage), keyEquivalent: "c"))
+        menu.addItem(NSMenuItem(title: "保存到文件…", action: #selector(saveImage), keyEquivalent: "s"))
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "关闭贴图 (双击 / Esc)", action: #selector(closeSelf), keyEquivalent: "w"))
+
+        for item in menu.items { item.target = self }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func copyImage() {
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.writeObjects([image])
+        board.setData(Data(), forType: ClipboardStore.internalPasteboardType)
+    }
+
+    @objc private func saveImage() {
+        let savePanel = NSSavePanel()
+        savePanel.nameFieldStringValue = "Screenshot-\(Int(Date().timeIntervalSince1970)).png"
+        savePanel.directoryURL = ScreenshotDestination.resolveSaveDirectory()
+        NSApp.activate(ignoringOtherApps: true)
+        if savePanel.runModal() == .OK, let url = savePanel.url {
+            if let data = image.tiffRepresentation,
+               let rep = NSBitmapImageRep(data: data),
+               let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: url, options: .atomic)
+            }
+        }
+    }
+
+    @objc private func closeSelf() {
+        panel?.closeAndNotify()
+    }
+}
+
 // MARK: - Unified capture/annotate view (WeChat-style single overlay)
 
 final class CaptureView: NSView {
@@ -548,7 +665,7 @@ final class CaptureView: NSView {
     private var toolButtons: [NSButton] = []
     private lazy var toolbar: NSView = makeToolbar()
     private var toolbarSize: NSSize {
-        NSSize(width: 472, height: activeTool == nil ? 50 : 86)
+        NSSize(width: 512, height: activeTool == nil ? 50 : 86)
     }
     private var strokeColorIndex: Int
     private var strokeColor: NSColor { AnnotationStyle.palette[strokeColorIndex] }
@@ -691,6 +808,9 @@ final class CaptureView: NSView {
             } else if chars == "c" {
                 confirmCopy()
                 return
+            } else if chars == "p" {
+                confirmPin()
+                return
             }
         } else {
             switch chars {
@@ -700,6 +820,7 @@ final class CaptureView: NSView {
             case "p": selectTool(.pen); return
             case "m": selectTool(.mosaic); return
             case "t": selectTool(.text); return
+            case "f": confirmPin(); return
             default: break
             }
         }
@@ -876,6 +997,17 @@ final class CaptureView: NSView {
         controller?.complete(result)
     }
 
+    private func confirmPin() {
+        guard phase == .editing, let result = renderedResult(), let window = self.window else { return }
+        let screenRect = CGRect(
+            x: window.frame.minX + selection.minX,
+            y: window.frame.minY + selection.minY,
+            width: selection.width,
+            height: selection.height
+        )
+        controller?.pin(result, at: screenRect)
+    }
+
     private func confirmSave() {
         guard phase == .editing, let result = renderedResult(), save(result) else {
             NSSound.beep()
@@ -967,6 +1099,8 @@ final class CaptureView: NSView {
             confirmSave()
         case 13:
             confirmCopy()
+        case 14:
+            confirmPin()
         default:
             break
         }
@@ -1005,6 +1139,7 @@ final class CaptureView: NSView {
         ]
 
         let actionItems: [ToolbarItemDef] = [
+            ToolbarItemDef(symbol: "pin.fill", tip: "钉在屏幕上 / 贴图 (F / ⌘P)", tag: 14, isTool: false, tintColor: nil),
             ToolbarItemDef(symbol: "arrow.uturn.backward", tip: "撤销 (⌘Z)", tag: 10, isTool: false, tintColor: nil),
             ToolbarItemDef(symbol: "square.and.arrow.down", tip: "保存到文件 (⌘S)", tag: 12, isTool: false, tintColor: nil)
         ]
