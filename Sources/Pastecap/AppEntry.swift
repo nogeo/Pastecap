@@ -5,14 +5,18 @@ import SwiftUI
 struct PastecapApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
-    var body: some Scene { Settings { EmptyView() } }
+    var body: some Scene {
+        Settings {
+            SettingsView(store: delegate.history, hotKeySettings: delegate.hotKeySettings)
+        }
+    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
-    private var history = ClipboardStore()
-    private var hotKeySettings = HotKeySettings()
+    let history = ClipboardStore()
+    let hotKeySettings = HotKeySettings()
     private var monitor: ClipboardMonitor!
     private var hotKeys: HotKeyManager!
     private var screenshot: ScreenshotController!
@@ -52,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.performClose(nil)
         NSApp.deactivate()
     }
+
+    /// 菜单栏应用没有常规窗口：拒绝系统在激活/启动时自动打开的窗口，
+    /// 避免弹出空白的 Settings 窗口（如安装后从 Finder 打开时）。
+    func applicationShouldOpenUntitledFile(_ sender: Any) -> Bool { false }
 
     @objc private func togglePopover() { popover.isShown ? popover.performClose(nil) : showPopover() }
     private func showPopover() {
