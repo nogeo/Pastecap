@@ -38,7 +38,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover = NSPopover()
         popover.behavior = .transient
         popover.contentSize = NSSize(width: 420, height: 570)
-        popover.contentViewController = NSHostingController(rootView: HistoryView(store: history, hotKeySettings: hotKeySettings, onScreenshot: { [weak self] in self?.startScreenshot() }))
+        popover.contentViewController = NSHostingController(rootView: HistoryView(
+            store: history,
+            hotKeySettings: hotKeySettings,
+            onScreenshot: { [weak self] in self?.startScreenshot() },
+            onCopied: { [weak self] in self?.closeAfterCopy() }
+        ))
+    }
+
+    /// 点击列表项复制后收起窗口，并把焦点还给之前的应用，方便直接 ⌘V 粘贴
+    private func closeAfterCopy() {
+        guard popover.isShown else { return }
+        popover.performClose(nil)
+        NSApp.deactivate()
     }
 
     @objc private func togglePopover() { popover.isShown ? popover.performClose(nil) : showPopover() }

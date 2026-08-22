@@ -21,6 +21,7 @@ struct HistoryView: View {
     @ObservedObject var store: ClipboardStore
     @ObservedObject var hotKeySettings: HotKeySettings
     let onScreenshot: () -> Void
+    let onCopied: () -> Void
     @State private var search = ""
     @State private var selectedFilter: HistoryCategoryFilter = .all
     @State private var showingSettings = false
@@ -285,6 +286,10 @@ struct HistoryView: View {
         store.copy(item)
         withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
             copiedItemID = item.id
+        }
+        // 留出「已复制」反馈可见的时间，再收起窗口方便直接粘贴
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            onCopied()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
             guard copiedItemID == item.id else { return }

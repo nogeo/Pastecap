@@ -31,12 +31,53 @@ enum ScreenshotGeometry {
     static func selectionRect(from start: CGPoint, to end: CGPoint) -> CGRect {
         CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
     }
+
+    /// CGWindowList 全局坐标（主屏左上为原点、y 向下）→ AppKit 全局坐标（y 向上）
+    static func appKitRect(fromGlobal rect: CGRect, primaryScreenFrame: CGRect) -> CGRect {
+        CGRect(
+            x: primaryScreenFrame.minX + rect.minX,
+            y: primaryScreenFrame.maxY - rect.maxY,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+
+    static func menuBarHeight(screenFrame: CGRect, visibleFrame: CGRect) -> CGFloat {
+        max(0, min(screenFrame.maxY - visibleFrame.maxY, screenFrame.height))
+    }
+}
+
+/// 微信式智能选区：鼠标移动时按块高亮光标下的区域。
+/// windowRegions 为前台到后台排序的屏幕局部坐标窗口；全屏窗口盖住菜单栏，
+/// 所以命中优先级是窗口 → 菜单栏 → 菜单栏以下整块。
+struct ScreenRegionMap {
+    let windowRegions: [CGRect]
+    let menuBarRegion: CGRect?
+    let desktopRegion: CGRect
+
+    func region(at point: CGPoint) -> CGRect? {
+        for region in windowRegions where region.contains(point) { return region }
+        if let menuBarRegion, menuBarRegion.contains(point) { return menuBarRegion }
+        return desktopRegion.contains(point) ? desktopRegion : nil
+    }
+
+    static func localWindowRegions(from globalRegions: [CGRect], screenFrame: CGRect) -> [CGRect] {
+        globalRegions.compactMap { region in
+            let clipped = region.intersection(screenFrame)
+            guard !clipped.isNull, clipped.width >= 1, clipped.height >= 1 else { return nil }
+            return CGRect(
+                origin: CGPoint(x: clipped.minX - screenFrame.minX, y: clipped.minY - screenFrame.minY),
+                size: clipped.size
+            )
+        }
+    }
 }
 
 struct ScreenSnapshot {
     let displayID: CGDirectDisplayID
     let screenFrame: CGRect
     let image: CGImage
+    let regionMap: ScreenRegionMap
 }
 
 // MARK: - Permission
@@ -373,7 +414,7 @@ final class ScreenshotController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         captureWindows = NSScreen.screens.compactMap { screen in
             guard let displayID = displayID(for: screen), let snapshot = snapshots[displayID] else { return nil }
-            return CaptureWindow(screen: screen, snapshot: snapshot.image, controller: self)
+            return CaptureWindow(screen: screen, snapshot: snapshot.image, regionMap: snapshot.regionMap, controller: self)
         }
         guard !captureWindows.isEmpty else {
             snapshots.removeAll()
@@ -381,7 +422,9 @@ final class ScreenshotController: NSObject {
             return
         }
         captureWindows.forEach { $0.orderFrontRegardless() }
-        captureWindows.first?.makeKey()
+        let mouseLocation = NSEvent.mouseLocation
+        let windowUnderMouse = captureWindows.first { $0.frame.contains(mouseLocation) }
+        (windowUnderMouse ?? captureWindows.first)?.makeKey()
         NSCursor.crosshair.push()
         cursorIsPushed = true
     }
@@ -445,6 +488,7 @@ final class ScreenshotController: NSObject {
     @MainActor
     private func captureVisibleScreens() async throws -> [CGDirectDisplayID: ScreenSnapshot] {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let windowRegions = Self.onScreenWindowRegions()
         var result: [CGDirectDisplayID: ScreenSnapshot] = [:]
 
         for screen in NSScreen.screens {
@@ -461,9 +505,43 @@ final class ScreenshotController: NSObject {
             configuration.shouldBeOpaque = true
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-            result[displayID] = ScreenSnapshot(displayID: displayID, screenFrame: screen.frame, image: image)
+            result[displayID] = ScreenSnapshot(
+                displayID: displayID,
+                screenFrame: screen.frame,
+                image: image,
+                regionMap: Self.makeRegionMap(for: screen, windowRegions: windowRegions)
+            )
         }
         return result
+    }
+
+    /// CGWindowList 按前台到后台返回；只保留常规应用窗口与普通浮层
+    ///（layer 0..<20），排除菜单栏、Dock 等系统窗口。
+    private static func onScreenWindowRegions() -> [CGRect] {
+        guard let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        let primaryFrame = (NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.screens.first)?.frame ?? .zero
+        return infos.compactMap { info -> CGRect? in
+            guard let layer = info[kCGWindowLayer as String] as? Int, (0..<20).contains(layer),
+                  let bounds = info[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  rect.width >= 1, rect.height >= 1 else { return nil }
+            return ScreenshotGeometry.appKitRect(fromGlobal: rect, primaryScreenFrame: primaryFrame)
+        }
+    }
+
+    private static func makeRegionMap(for screen: NSScreen, windowRegions: [CGRect]) -> ScreenRegionMap {
+        let frame = screen.frame
+        let menuBarHeight = ScreenshotGeometry.menuBarHeight(screenFrame: frame, visibleFrame: screen.visibleFrame)
+        let showsMenuBar = menuBarHeight >= 8
+        return ScreenRegionMap(
+            windowRegions: ScreenRegionMap.localWindowRegions(from: windowRegions, screenFrame: frame),
+            menuBarRegion: showsMenuBar
+                ? CGRect(x: 0, y: frame.height - menuBarHeight, width: frame.width, height: menuBarHeight)
+                : nil,
+            desktopRegion: CGRect(x: 0, y: 0, width: frame.width, height: showsMenuBar ? frame.height - menuBarHeight : frame.height)
+        )
     }
 
     private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
@@ -510,7 +588,7 @@ private enum ScreenshotCaptureError: LocalizedError {
 final class CaptureWindow: NSWindow {
     private weak var controller: ScreenshotController?
 
-    init(screen: NSScreen, snapshot: CGImage, controller: ScreenshotController) {
+    init(screen: NSScreen, snapshot: CGImage, regionMap: ScreenRegionMap, controller: ScreenshotController) {
         self.controller = controller
         super.init(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
         level = .screenSaver
@@ -518,7 +596,7 @@ final class CaptureWindow: NSWindow {
         isOpaque = false
         ignoresMouseEvents = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        contentView = CaptureView(snapshot: snapshot, viewSize: screen.frame.size, controller: controller)
+        contentView = CaptureView(snapshot: snapshot, viewSize: screen.frame.size, regionMap: regionMap, controller: controller)
     }
 
     override var canBecomeKey: Bool { true }
@@ -647,6 +725,7 @@ final class CaptureView: NSView {
     private weak var controller: ScreenshotController?
     private let snapshotCG: CGImage
     private let snapshot: NSImage
+    private let regionMap: ScreenRegionMap
     private var phase: Phase = .idle
     private var interaction: Interaction = .none
     private var activeHandle: Handle?
@@ -655,6 +734,7 @@ final class CaptureView: NSView {
     private var moveStartMouse = CGPoint.zero
     private var moveStartOrigin = CGPoint.zero
     private var selection = CGRect.zero
+    private var snapCandidate: CGRect?
     private var annotations: [ScreenshotAnnotation] = []
     private var activeTool: AnnotationTool?
     private var currentAnnotation: ScreenshotAnnotation?
@@ -678,9 +758,10 @@ final class CaptureView: NSView {
     private var textField: NSTextField?
     private var textOrigin = CGPoint.zero
 
-    init(snapshot: CGImage, viewSize: CGSize, controller: ScreenshotController) {
+    init(snapshot: CGImage, viewSize: CGSize, regionMap: ScreenRegionMap, controller: ScreenshotController) {
         self.snapshotCG = snapshot
         self.snapshot = NSImage(cgImage: snapshot, size: viewSize)
+        self.regionMap = regionMap
         self.controller = controller
         let defaults = UserDefaults.standard
         let colorIndex = defaults.integer(forKey: "annotationColorIndex")
@@ -696,6 +777,15 @@ final class CaptureView: NSView {
 
     required init?(coder: NSCoder) { nil }
     override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window, phase == .idle, selection.isNull || selection.isEmpty else { return }
+        let local = CGPoint(x: NSEvent.mouseLocation.x - window.frame.minX, y: NSEvent.mouseLocation.y - window.frame.minY)
+        guard bounds.contains(local) else { return }
+        selection = regionMap.region(at: local) ?? .zero
+        needsDisplay = true
+    }
 
     // MARK: Mouse
 
@@ -765,10 +855,16 @@ final class CaptureView: NSView {
                 phase = .editing
                 showToolbar()
                 window?.makeKey()
+            } else if let snap = snapCandidate, snap.width >= 2, snap.height >= 2 {
+                selection = snap
+                phase = .editing
+                showToolbar()
+                window?.makeKey()
             } else {
                 phase = .idle
-                selection = .zero
+                selection = regionMap.region(at: point) ?? .zero
             }
+            snapCandidate = nil
         case .annotate:
             if let annotation = currentAnnotation, isValid(annotation) {
                 annotations.append(annotation)
@@ -785,6 +881,13 @@ final class CaptureView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         lastMousePoint = convert(event.locationInWindow, from: nil)
+        if phase == .idle, interaction == .none {
+            let hovered = regionMap.region(at: lastMousePoint) ?? .zero
+            if !hovered.equalTo(selection) {
+                selection = hovered
+                needsDisplay = true
+            }
+        }
         updateCursor(lastMousePoint)
     }
 
@@ -843,10 +946,13 @@ final class CaptureView: NSView {
 
     // MARK: Interaction helpers
 
+    /// 按下先记住光标下的智能识别块：只是点击（未拖出有效框）就选中该块，
+    /// 拖动则立即切换为自由框选。
     private func beginNewSelection(at point: CGPoint) {
         annotations.removeAll()
         currentAnnotation = nil
-        selection = .zero
+        snapCandidate = regionMap.region(at: point)
+        selection = snapCandidate ?? .zero
         hideToolbar()
         phase = .dragging
         interaction = .newSelection
@@ -988,8 +1094,13 @@ final class CaptureView: NSView {
 
     // MARK: Completion
 
+    /// 悬停高亮（idle）或已确认（editing）的区域都允许直接回车完成
+    private var hasSelectedRegion: Bool {
+        (phase == .editing || phase == .idle) && selection.width >= 2 && selection.height >= 2
+    }
+
     private func confirmCopy() {
-        guard phase == .editing, let result = renderedResult() else { return }
+        guard hasSelectedRegion, let result = renderedResult() else { return }
         let board = NSPasteboard.general
         board.clearContents()
         board.writeObjects([result])
@@ -998,7 +1109,7 @@ final class CaptureView: NSView {
     }
 
     private func confirmPin() {
-        guard phase == .editing, let result = renderedResult(), let window = self.window else { return }
+        guard hasSelectedRegion, let result = renderedResult(), let window = self.window else { return }
         let screenRect = CGRect(
             x: window.frame.minX + selection.minX,
             y: window.frame.minY + selection.minY,
@@ -1009,7 +1120,7 @@ final class CaptureView: NSView {
     }
 
     private func confirmSave() {
-        guard phase == .editing, let result = renderedResult(), save(result) else {
+        guard hasSelectedRegion, let result = renderedResult(), save(result) else {
             NSSound.beep()
             return
         }
@@ -1425,9 +1536,11 @@ final class CaptureView: NSView {
         if interaction == .newSelection || interaction == .resize {
             drawSizeLabel()
             drawMagnifier(at: lastMousePoint)
+        } else if phase == .idle, !selection.isNull, !selection.isEmpty {
+            drawSizeLabel()
         }
-        if phase == .idle {
-            drawHint("拖动选择截图区域 · 松开后可移动调整 · Esc 取消 · 回车完成")
+        if phase == .idle, selection.isNull || selection.isEmpty {
+            drawHint("移动鼠标智能识别窗口 · 点击选中高亮区域 · 拖动自由框选 · Esc 取消")
         }
         drawCancelButton()
     }

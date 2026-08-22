@@ -214,6 +214,51 @@ private func testScreenshotGeometry() throws {
     try expect(frozenScreen.cropping(to: topHalf)?.height == 4, "frozen snapshot crop failed")
 }
 
+private func testSmartRegionDetection() throws {
+    let primary = CGRect(x: 0, y: 0, width: 1000, height: 800)
+    try expect(
+        ScreenshotGeometry.appKitRect(fromGlobal: CGRect(x: 10, y: 20, width: 100, height: 50), primaryScreenFrame: primary)
+            == CGRect(x: 10, y: 730, width: 100, height: 50),
+        "global-to-appkit rect conversion is wrong"
+    )
+    try expect(
+        ScreenshotGeometry.menuBarHeight(screenFrame: primary, visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 775)) == 25,
+        "menu bar height is wrong"
+    )
+    try expect(
+        ScreenshotGeometry.menuBarHeight(screenFrame: primary, visibleFrame: primary) == 0,
+        "display without a menu bar should report zero height"
+    )
+
+    let menuBar = CGRect(x: 0, y: 775, width: 1000, height: 25)
+    let desktop = CGRect(x: 0, y: 0, width: 1000, height: 775)
+    let map = ScreenRegionMap(
+        windowRegions: [CGRect(x: 100, y: 100, width: 300, height: 200)],
+        menuBarRegion: menuBar,
+        desktopRegion: desktop
+    )
+    try expect(map.region(at: CGPoint(x: 150, y: 150)) == CGRect(x: 100, y: 100, width: 300, height: 200), "point inside a window should snap to the window")
+    try expect(map.region(at: CGPoint(x: 500, y: 782)) == menuBar, "point in the menu bar strip should snap to the menu bar")
+    try expect(map.region(at: CGPoint(x: 500, y: 400)) == desktop, "point on the desktop should snap to the block below the menu bar")
+
+    let fullScreenApp = ScreenRegionMap(
+        windowRegions: [CGRect(x: 0, y: 0, width: 1000, height: 800)],
+        menuBarRegion: menuBar,
+        desktopRegion: desktop
+    )
+    try expect(fullScreenApp.region(at: CGPoint(x: 500, y: 790))?.height == 800, "full-screen window should win over the menu bar")
+
+    let locals = ScreenRegionMap.localWindowRegions(
+        from: [
+            CGRect(x: 1050, y: 950, width: 100, height: 200),
+            CGRect(x: 1150, y: 1900, width: 50, height: 50),
+            CGRect(x: 2000, y: 2000, width: 50, height: 50)
+        ],
+        screenFrame: CGRect(x: 1000, y: 1000, width: 500, height: 900)
+    )
+    try expect(locals == [CGRect(x: 50, y: 0, width: 100, height: 150)], "window regions should be clipped to the screen and converted to local coordinates")
+}
+
 private func testSelectionClamping() throws {
     let screen = CGRect(x: 0, y: 0, width: 1000, height: 700)
     let size = CGSize(width: 200, height: 100)
@@ -434,6 +479,7 @@ do {
     try testInternalCopySuppression()
     try testSensitivePasteboardIgnored()
     try testScreenshotGeometry()
+    try testSmartRegionDetection()
     try testSelectionClamping()
     try testScreenCaptureAuthorization()
     try testSaveDirectoryResolution()
