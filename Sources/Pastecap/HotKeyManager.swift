@@ -8,10 +8,15 @@ struct HotKeyShortcut: Codable, Equatable {
     let modifiers: UInt32
 
     static let historyDefault = HotKeyShortcut(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(cmdKey | shiftKey))
-    static let screenshotDefault = HotKeyShortcut(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(optionKey | cmdKey))
+    static let screenshotDefault = HotKeyShortcut(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(cmdKey | controlKey))
 
     static let legacyHistoryDefault = HotKeyShortcut(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(optionKey | cmdKey))
-    static let legacyScreenshotDefault = HotKeyShortcut(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(controlKey | optionKey))
+
+    /// 历代截图默认值：设置首次运行即持久化，老用户需要靠这份列表迁移到新默认
+    static let legacyScreenshotDefaults = [
+        HotKeyShortcut(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(controlKey | optionKey)),
+        HotKeyShortcut(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(optionKey | cmdKey))
+    ]
 
     var displayName: String {
         var result = ""
@@ -66,7 +71,7 @@ final class HotKeySettings: ObservableObject {
         var loadedHistory = Self.load("historyHotKey", defaults: defaults) ?? .historyDefault
         if loadedHistory == HotKeyShortcut.legacyHistoryDefault { loadedHistory = .historyDefault }
         var loadedScreenshot = Self.load("screenshotHotKey", defaults: defaults) ?? .screenshotDefault
-        if loadedScreenshot == HotKeyShortcut.legacyScreenshotDefault { loadedScreenshot = .screenshotDefault }
+        if HotKeyShortcut.legacyScreenshotDefaults.contains(loadedScreenshot) { loadedScreenshot = .screenshotDefault }
         history = loadedHistory
         screenshot = loadedScreenshot
         persist()

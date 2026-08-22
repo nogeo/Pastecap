@@ -73,7 +73,7 @@
 | 功能 | 默认快捷键 | 说明 |
 | :--- | :--- | :--- |
 | **打开剪贴板** | <kbd>⇧ Shift</kbd> + <kbd>⌘ Cmd</kbd> + <kbd>V</kbd> | 呼出/隐藏剪贴板主窗口 |
-| **区域截图** | <kbd>⌥ Option</kbd> + <kbd>⌘ Cmd</kbd> + <kbd>A</kbd> | 立即进入全屏选区截图模式 |
+| **区域截图** | <kbd>⌃ Control</kbd> + <kbd>⌘ Cmd</kbd> + <kbd>C</kbd> | 立即进入全屏选区截图模式 |
 | **完成并复制** | <kbd>↵ Enter</kbd> / <kbd>⌘ Cmd</kbd> + <kbd>C</kbd> | 截图完成后复制到剪贴板 |
 | **钉在屏幕上 (贴图)** | <kbd>F</kbd> / <kbd>⌘ Cmd</kbd> + <kbd>P</kbd> | 截图区域转为最上层置顶悬浮窗 |
 | **取消截图** | <kbd>⎋ Esc</kbd> | 退出截图或放弃当前文本输入 |
@@ -88,7 +88,7 @@
 # 本地编译调试
 swift build
 
-# 执行全部自动化测试 (68 项断言)
+# 执行全部自动化测试 (70 项断言)
 ./scripts/run-tests.sh
 
 # 构建生成 Release 安装包 (dist/Pastecap.dmg)

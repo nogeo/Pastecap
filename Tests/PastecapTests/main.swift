@@ -329,12 +329,21 @@ private func testHotKeySettings() throws {
     try expect(settings.history == .historyDefault, "history shortcut default is wrong")
     try expect(settings.screenshot == .screenshotDefault, "screenshot shortcut default is wrong")
     try expect(settings.history.displayName == "⇧⌘V", "history shortcut display is wrong")
-    try expect(settings.screenshot.displayName == "⌥⌘A", "screenshot shortcut display is wrong")
+    try expect(settings.screenshot.displayName == "⌃⌘C", "screenshot shortcut display is wrong")
     settings.history = HotKeyShortcut(keyCode: 8, modifiers: UInt32(controlKey | shiftKey))
     let restored = HotKeySettings(defaults: context.defaults)
     try expect(restored.history.displayName == "⌃⇧C", "custom shortcut did not persist")
     restored.reset()
     try expect(restored.history == .historyDefault && restored.screenshot == .screenshotDefault, "shortcut reset failed")
+
+    let oldDefault = HotKeyShortcut(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(optionKey | cmdKey))
+    context.defaults.set(try JSONEncoder().encode(oldDefault), forKey: "screenshotHotKey")
+    let migrated = HotKeySettings(defaults: context.defaults)
+    try expect(migrated.screenshot == .screenshotDefault, "stored old default shortcut was not migrated to the new default")
+    let custom = HotKeyShortcut(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(cmdKey | shiftKey))
+    context.defaults.set(try JSONEncoder().encode(custom), forKey: "screenshotHotKey")
+    let kept = HotKeySettings(defaults: context.defaults)
+    try expect(kept.screenshot == custom, "user-customized shortcut must not be overwritten by migration")
 }
 
 private func testAnnotationRendering() throws {
