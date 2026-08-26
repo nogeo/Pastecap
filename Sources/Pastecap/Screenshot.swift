@@ -80,6 +80,34 @@ struct ScreenSnapshot {
     let regionMap: ScreenRegionMap
 }
 
+/// 从冻结快照按视图坐标采样像素色值（#RRGGBB）。
+/// 用 1×1 位图上下文平移绘制代替整屏位图副本，避免 Retina 全屏 ~56MB 的常驻开销。
+enum PixelColor {
+    static func hex(at point: CGPoint, in image: CGImage, viewSize: CGSize) -> String? {
+        guard image.width >= 1, image.height >= 1 else { return nil }
+        let scaleX = CGFloat(image.width) / max(viewSize.width, 1)
+        let scaleY = CGFloat(image.height) / max(viewSize.height, 1)
+        let x = min(max(Int(point.x * scaleX), 0), image.width - 1)
+        let yFromTop = min(max(Int((viewSize.height - point.y) * scaleY), 0), image.height - 1)
+        guard let context = CGContext(
+            data: nil,
+            width: 1,
+            height: 1,
+            bitsPerComponent: 8,
+            bytesPerRow: 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.interpolationQuality = .none
+        // 先裁出目标单像素再 1:1 绘制（cropping 原点在左上，y 即自顶向下行号）
+        guard let pixel = image.cropping(to: CGRect(x: x, y: yFromTop, width: 1, height: 1)) else { return nil }
+        context.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        guard let data = context.data else { return nil }
+        let rgba = data.bindMemory(to: UInt8.self, capacity: 4)
+        return String(format: "#%02X%02X%02X", rgba[0], rgba[1], rgba[2])
+    }
+}
+
 // MARK: - Permission
 
 enum ScreenCaptureAuthorization {
@@ -741,7 +769,6 @@ final class CaptureView: NSView {
     private var annotateStart = CGPoint.zero
     private var lastMousePoint = CGPoint.zero
     private var pixelatedCache: [CGFloat: NSImage] = [:]
-    private lazy var samplingRep: NSBitmapImageRep? = NSBitmapImageRep(cgImage: snapshotCG)
     private var toolButtons: [NSButton] = []
     private lazy var toolbar: NSView = makeToolbar()
     private var toolbarSize: NSSize {
@@ -783,6 +810,7 @@ final class CaptureView: NSView {
         guard let window, phase == .idle, selection.isNull || selection.isEmpty else { return }
         let local = CGPoint(x: NSEvent.mouseLocation.x - window.frame.minX, y: NSEvent.mouseLocation.y - window.frame.minY)
         guard bounds.contains(local) else { return }
+        lastMousePoint = local
         selection = regionMap.region(at: local) ?? .zero
         needsDisplay = true
     }
@@ -885,8 +913,8 @@ final class CaptureView: NSView {
             let hovered = regionMap.region(at: lastMousePoint) ?? .zero
             if !hovered.equalTo(selection) {
                 selection = hovered
-                needsDisplay = true
             }
+            needsDisplay = true
         }
         updateCursor(lastMousePoint)
     }
@@ -924,6 +952,7 @@ final class CaptureView: NSView {
             case "m": selectTool(.mosaic); return
             case "t": selectTool(.text); return
             case "f": confirmPin(); return
+            case "c": copyColorAtCursor(); return
             default: break
             }
         }
@@ -1106,6 +1135,54 @@ final class CaptureView: NSView {
         board.writeObjects([result])
         board.setData(Data(), forType: ClipboardStore.internalPasteboardType)
         controller?.complete(result)
+    }
+
+    // MARK: Color picking
+
+    /// Snipaste 式取色：把光标下像素的 HEX 色值写入剪贴板，截图会话保持打开以便连续取色。
+    private func copyColorAtCursor() {
+        guard let hex = colorHex(at: lastMousePoint) else {
+            NSSound.beep()
+            return
+        }
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(hex, forType: .string)
+        showToast("已复制 \(hex)")
+    }
+
+    private var toastText: String?
+    private var toastHideWorkItem: DispatchWorkItem?
+
+    private func showToast(_ text: String) {
+        toastText = text
+        toastHideWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.toastText == text else { return }
+            self.toastText = nil
+            self.needsDisplay = true
+        }
+        toastHideWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: item)
+        needsDisplay = true
+    }
+
+    private func drawToast() {
+        guard let text = toastText else { return }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: NSColor.white
+        ]
+        let textSize = text.size(withAttributes: attributes)
+        let rect = CGRect(
+            x: (bounds.width - textSize.width - 28) / 2,
+            y: bounds.maxY - 56,
+            width: textSize.width + 28,
+            height: textSize.height + 10
+        )
+        NSColor.black.withAlphaComponent(0.78).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+        text.draw(at: CGPoint(x: rect.minX + 14, y: rect.minY + 5), withAttributes: attributes)
     }
 
     private func confirmPin() {
@@ -1536,13 +1613,15 @@ final class CaptureView: NSView {
         if interaction == .newSelection || interaction == .resize {
             drawSizeLabel()
             drawMagnifier(at: lastMousePoint)
-        } else if phase == .idle, !selection.isNull, !selection.isEmpty {
-            drawSizeLabel()
+        } else if phase == .idle {
+            if !selection.isNull, !selection.isEmpty { drawSizeLabel() }
+            drawMagnifier(at: lastMousePoint)
         }
         if phase == .idle, selection.isNull || selection.isEmpty {
-            drawHint("移动鼠标智能识别窗口 · 点击选中高亮区域 · 拖动自由框选 · Esc 取消")
+            drawHint("移动鼠标智能识别窗口 · 点击选中高亮区域 · 拖动自由框选 · C 取色 · Esc 取消")
         }
         drawCancelButton()
+        drawToast()
     }
 
     private func pixelatedImage(block: CGFloat) -> NSImage {
@@ -1623,13 +1702,7 @@ final class CaptureView: NSView {
     }
 
     private func colorHex(at point: CGPoint) -> String? {
-        guard let samplingRep else { return nil }
-        let scaleX = CGFloat(snapshotCG.width) / max(bounds.width, 1)
-        let scaleY = CGFloat(snapshotCG.height) / max(bounds.height, 1)
-        let x = min(max(Int(point.x * scaleX), 0), max(snapshotCG.width - 1, 0))
-        let y = min(max(Int((bounds.height - point.y) * scaleY), 0), max(snapshotCG.height - 1, 0))
-        guard let color = samplingRep.colorAt(x: x, y: y) else { return nil }
-        return String(format: "#%02X%02X%02X", Int(color.redComponent * 255), Int(color.greenComponent * 255), Int(color.blueComponent * 255))
+        PixelColor.hex(at: point, in: snapshotCG, viewSize: bounds.size)
     }
 
     private func drawCancelButton() {

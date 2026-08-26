@@ -431,6 +431,53 @@ private func testAnnotationRendering() throws {
     try expect(thickInk > thinInk, "thickness setting did not change the rendered stroke width")
 }
 
+private func testPixelColorSampling() throws {
+    _ = NSApplication.shared
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(
+        data: nil,
+        width: 2,
+        height: 2,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else { throw TestFailure(description: "could not create sampling test context") }
+    // 用 deviceRGB 色彩空间构造纯色，避免 generic RGB 绘制时被色彩匹配偏移
+    let pureRed = CGColor(colorSpace: colorSpace, components: [1, 0, 0, 1])!
+    let pureBlue = CGColor(colorSpace: colorSpace, components: [0, 0, 1, 1])!
+    context.setFillColor(pureRed)
+    context.fill(CGRect(x: 0, y: 0, width: 2, height: 1))
+    context.setFillColor(pureBlue)
+    context.fill(CGRect(x: 0, y: 1, width: 2, height: 1))
+    guard let image = context.makeImage() else { throw TestFailure(description: "could not create sampling test image") }
+
+    try expect(
+        PixelColor.hex(at: CGPoint(x: 0.5, y: 0.5), in: image, viewSize: CGSize(width: 2, height: 2)) == "#FF0000",
+        "bottom-left pixel should sample as pure red"
+    )
+    try expect(
+        PixelColor.hex(at: CGPoint(x: 1.5, y: 1.5), in: image, viewSize: CGSize(width: 2, height: 2)) == "#0000FF",
+        "top-right pixel should sample as pure blue"
+    )
+    try expect(
+        PixelColor.hex(at: CGPoint(x: 3.5, y: 3.5), in: image, viewSize: CGSize(width: 4, height: 4)) == "#0000FF",
+        "Retina-style downscaled top-right sample is wrong"
+    )
+    try expect(
+        PixelColor.hex(at: CGPoint(x: 0.25, y: 0.25), in: image, viewSize: CGSize(width: 4, height: 4)) == "#FF0000",
+        "Retina-style downscaled bottom-left sample is wrong"
+    )
+    try expect(
+        PixelColor.hex(at: CGPoint(x: -50, y: -50), in: image, viewSize: CGSize(width: 2, height: 2)) == "#FF0000",
+        "out-of-bounds point should clamp to the nearest pixel"
+    )
+    try expect(
+        PixelColor.hex(at: CGPoint(x: 999, y: 999), in: image, viewSize: CGSize(width: 2, height: 2)) == "#0000FF",
+        "far out-of-bounds point should clamp to the farthest pixel"
+    )
+}
+
 private func testSmartItemDetection() throws {
     let urlItem = ClipboardItem(
         id: UUID(),
@@ -494,6 +541,7 @@ do {
     try testSaveDirectoryResolution()
     try testHotKeySettings()
     try testAnnotationRendering()
+    try testPixelColorSampling()
     try testSupportDirectoryName()
     try testSmartItemDetection()
     print("PASS: \(passed) assertions")
