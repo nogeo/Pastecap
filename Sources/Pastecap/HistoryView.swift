@@ -17,16 +17,34 @@ enum HistoryCategoryFilter: String, CaseIterable, Identifiable {
     }
 }
 
+/// 剪贴板列表键盘导航的纯索引计算，便于单元测试
+enum HistoryKeyboardNav {
+    /// 从 currentIndex 向 delta（±1）移动，钳制在 0..<count；空列表返回 nil
+    static func selectedIndex(afterMovingFrom currentIndex: Int?, count: Int, delta: Int) -> Int? {
+        guard count > 0 else { return nil }
+        return min(max((currentIndex ?? -1) + delta, 0), count - 1)
+    }
+
+    /// 删除 index 处的条目后，高亮应落在新列表的位置（尽量保持视觉位置不动）
+    static func selectionAfterRemoval(index: Int, remainingCount: Int) -> Int? {
+        guard remainingCount > 0 else { return nil }
+        return min(index, remainingCount - 1)
+    }
+}
+
 struct HistoryView: View {
     @ObservedObject var store: ClipboardStore
     @ObservedObject var hotKeySettings: HotKeySettings
     let onScreenshot: () -> Void
     let onCopied: () -> Void
+    let onCancel: () -> Void
     @State private var search = ""
     @State private var selectedFilter: HistoryCategoryFilter = .all
     @State private var showingSettings = false
     @State private var confirmingClear = false
     @State private var copiedItemID: UUID?
+    @State private var selectedID: UUID?
+    @FocusState private var searchFocused: Bool
 
     private var filtered: [ClipboardItem] {
         let base: [ClipboardItem]
@@ -61,7 +79,7 @@ struct HistoryView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-                .frame(height: 52)
+                .frame(height: 48)
                 .fixedSize(horizontal: false, vertical: true)
 
             searchAndFilterBar
@@ -73,10 +91,10 @@ struct HistoryView: View {
                 .opacity(0.6)
 
             footer
-                .frame(height: 38)
+                .frame(height: 34)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(width: 420, height: 570)
+        .frame(width: 360, height: 480)
         .background(.regularMaterial)
         .sheet(isPresented: $showingSettings) { SettingsView(store: store, hotKeySettings: hotKeySettings) }
         .confirmationDialog("清空全部剪贴板记录？", isPresented: $confirmingClear) {
@@ -85,21 +103,94 @@ struct HistoryView: View {
         } message: {
             Text("此操作无法撤销。")
         }
+        .onAppear { prepareForKeyboardUse() }
+        // 每次弹出窗口都重置为「搜索框聚焦 + 高亮第一条」，直接打字即可筛选
+        .onReceive(NotificationCenter.default.publisher(for: NSPopover.didShowNotification)) { _ in
+            prepareForKeyboardUse()
+        }
+        .onExitCommand { onCancel() }
+        .onChange(of: search) { _, _ in selectedID = filtered.first?.id }
+        .onChange(of: selectedFilter) { _, _ in selectedID = filtered.first?.id }
+        .onKeyPress { press in handleKeyPress(press) }
+    }
+
+    private func prepareForKeyboardUse() {
+        search = ""
+        selectedID = filtered.first?.id
+        searchFocused = true
+    }
+
+    private func handleKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case .upArrow:
+            if moveSelection(-1) { return .handled }
+        case .downArrow:
+            if moveSelection(1) { return .handled }
+        default:
+            break
+        }
+        // ⌦（forward delete）删除高亮项；⌫ 保持原语义用于编辑搜索词
+        if press.characters == "\u{F728}" {
+            removeSelected()
+            return .handled
+        }
+        if press.modifiers.contains(.command),
+           let digit = press.characters.first?.wholeNumberValue, (1...9).contains(digit) {
+            if copyItemAt(index: digit - 1) { return .handled }
+        }
+        return .ignored
+    }
+
+    @discardableResult
+    private func moveSelection(_ delta: Int) -> Bool {
+        guard !filtered.isEmpty else { return false }
+        let current = filtered.firstIndex(where: { $0.id == selectedID })
+        guard let next = HistoryKeyboardNav.selectedIndex(afterMovingFrom: current, count: filtered.count, delta: delta) else { return false }
+        selectedID = filtered[next].id
+        return true
+    }
+
+    private func copySelected() {
+        if let id = selectedID, let item = filtered.first(where: { $0.id == id }) {
+            copyWithFeedback(item)
+        } else if let first = filtered.first {
+            copyWithFeedback(first)
+        }
+    }
+
+    @discardableResult
+    private func removeSelected() -> Bool {
+        guard let id = selectedID, let index = filtered.firstIndex(where: { $0.id == id }) else { return false }
+        let remaining = filtered.filter { $0.id != id }
+        store.remove(filtered[index])
+        if let next = HistoryKeyboardNav.selectionAfterRemoval(index: index, remainingCount: remaining.count) {
+            selectedID = remaining[next].id
+        } else {
+            selectedID = nil
+        }
+        return true
+    }
+
+    @discardableResult
+    private func copyItemAt(index: Int) -> Bool {
+        guard filtered.indices.contains(index) else { return false }
+        copyWithFeedback(filtered[index])
+        return true
+    }
+
+    private var appIcon: NSImage {
+        NSImage(named: "AppIcon") ?? NSApp.applicationIconImage
     }
 
     private var header: some View {
         HStack(spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.14))
-                    .frame(width: 30, height: 30)
-                Image(systemName: "doc.on.clipboard.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-            }
+            Image(nsImage: appIcon)
+                .resizable()
+                .frame(width: 30, height: 30)
+                .cornerRadius(7)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("剪贴板")
+                Text("Pastecap")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                 Text("历史记录 · 快速粘贴")
                     .font(.system(size: 11))
@@ -147,6 +238,9 @@ struct HistoryView: View {
                 TextField("搜索剪贴板…", text: $search)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
+                    .focused($searchFocused)
+                    // 回车即复制当前高亮项（搜索框始终持有焦点，保证快捷键可达）
+                    .onSubmit { copySelected() }
                 if !search.isEmpty {
                     Button { search = "" } label: {
                         Image(systemName: "xmark.circle.fill")
@@ -222,10 +316,11 @@ struct HistoryView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 6) {
+                        LazyVStack(spacing: 5) {
                             ForEach(filtered) { item in
                                 HistoryCardRow(
                                     item: item,
+                                    isSelected: selectedID == item.id,
                                     isCopied: copiedItemID == item.id,
                                     thumbnail: item.kind == .image ? store.thumbnail(for: item, size: CGSize(width: 52, height: 42)) : nil,
                                     onCopy: { copyWithFeedback(item) },
@@ -234,13 +329,18 @@ struct HistoryView: View {
                                 .id(item.id)
                             }
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
                     }
                     .scrollContentBackground(.hidden)
                     .onChange(of: store.items.first?.id) { _, _ in
                         guard let firstID = filtered.first?.id else { return }
                         withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(firstID, anchor: .top) }
+                    }
+                    // 键盘移动高亮时保持可见（不强制对齐，最小滚动量）
+                    .onChange(of: selectedID) { _, newID in
+                        guard let newID else { return }
+                        proxy.scrollTo(newID)
                     }
                 }
             }
@@ -258,6 +358,14 @@ struct HistoryView: View {
             .foregroundStyle(.secondary)
 
             Spacer()
+
+            Text("↑↓ 选择 · ↵ 复制 · ⌦ 删除")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+
+            Divider()
+                .frame(height: 12)
+                .padding(.horizontal, 6)
 
             Button("清空记录", role: .destructive) { confirmingClear = true }
                 .buttonStyle(.borderless)
@@ -288,7 +396,7 @@ struct HistoryView: View {
             copiedItemID = item.id
         }
         // 留出「已复制」反馈可见的时间，再收起窗口方便直接粘贴
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             onCopied()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
@@ -304,6 +412,7 @@ struct HistoryView: View {
 
 struct HistoryCardRow: View, Equatable {
     let item: ClipboardItem
+    let isSelected: Bool
     let isCopied: Bool
     let thumbnail: NSImage?
     let onCopy: () -> Void
@@ -312,7 +421,7 @@ struct HistoryCardRow: View, Equatable {
     @State private var isHovered = false
 
     static func == (lhs: HistoryCardRow, rhs: HistoryCardRow) -> Bool {
-        lhs.item == rhs.item && lhs.isCopied == rhs.isCopied && (lhs.thumbnail != nil) == (rhs.thumbnail != nil)
+        lhs.item == rhs.item && lhs.isSelected == rhs.isSelected && lhs.isCopied == rhs.isCopied && (lhs.thumbnail != nil) == (rhs.thumbnail != nil)
     }
 
     var body: some View {
@@ -503,6 +612,8 @@ struct HistoryCardRow: View, Equatable {
         ZStack {
             if isCopied {
                 Color.green.opacity(0.08)
+            } else if isSelected {
+                Color.accentColor.opacity(0.09)
             } else if isHovered {
                 Color.accentColor.opacity(0.05)
             } else {
@@ -511,17 +622,20 @@ struct HistoryCardRow: View, Equatable {
         }
         .animation(.easeInOut(duration: 0.15), value: isHovered)
         .animation(.easeInOut(duration: 0.15), value: isCopied)
+        .animation(.easeInOut(duration: 0.15), value: isSelected)
     }
 
     private var cardBorder: some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
             .stroke(
                 isCopied ? Color.green.opacity(0.4) :
-                (isHovered ? Color.accentColor.opacity(0.3) : Color(nsColor: .separatorColor).opacity(0.3)),
-                lineWidth: isCopied ? 1 : 0.5
+                (isSelected ? Color.accentColor.opacity(0.55) :
+                (isHovered ? Color.accentColor.opacity(0.3) : Color(nsColor: .separatorColor).opacity(0.3))),
+                lineWidth: (isCopied || isSelected) ? 1 : 0.5
             )
             .animation(.easeInOut(duration: 0.15), value: isHovered)
             .animation(.easeInOut(duration: 0.15), value: isCopied)
+            .animation(.easeInOut(duration: 0.15), value: isSelected)
     }
 }
 
@@ -565,7 +679,7 @@ struct SettingsView: View {
                 .padding(16)
             }
         }
-        .frame(width: 440, height: 530)
+        .frame(width: 360, height: 480)
         .background(.regularMaterial)
         .onAppear { refreshCacheSize() }
         .confirmationDialog("清理 Pastecap 缓存？", isPresented: $confirmingCacheClear) {

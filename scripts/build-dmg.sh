@@ -1,24 +1,25 @@
 #!/bin/sh
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD="$ROOT/.build/release"
+BUILD="$ROOT/.build/xcode-release/Build/Products/Release"
 APP="$ROOT/dist/Pastecap.app"
 DMG="$ROOT/dist/Pastecap.dmg"
 STAGE="$ROOT/.dmg-staging"
 ENTITLEMENTS="$ROOT/Packaging/Pastecap.entitlements"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 
-# 从 git 提取当前最近的 tag 版本号（例如 v1.2.0 -> 1.2.0），如果无 tag 则 fallback 到 1.0.0
-RAW_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")"
-VERSION="${RAW_TAG#v}"
+# App 和 DMG 共用版本源，避免未打 tag 时产物仍显示上一个版本。
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/Packaging/Info.plist")"
 COMMITS_COUNT="$(git rev-list --count HEAD 2>/dev/null || echo "1")"
 
 rm -rf "$ROOT/dist"
 rm -rf "$STAGE"
 mkdir -p "$ROOT/dist" "$APP/Contents/MacOS" "$APP/Contents/Resources" "$STAGE"
 "$ROOT/scripts/generate-icons.sh"
-swift build -c release --package-path "$ROOT"
-ditto "$BUILD/Pastecap" "$APP/Contents/MacOS/Pastecap"
+xcodebuild -project "$ROOT/Pastecap.xcodeproj" -scheme Pastecap \
+  -configuration Release -destination "platform=macOS,arch=$(uname -m)" \
+  -derivedDataPath "$ROOT/.build/xcode-release" build
+ditto "$BUILD/Pastecap.app" "$APP"
 ditto "$ROOT/Assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 ditto "$ROOT/Packaging/PrivacyInfo.xcprivacy" "$APP/Contents/Resources/PrivacyInfo.xcprivacy"
 printf 'APPL????' > "$APP/Contents/PkgInfo"

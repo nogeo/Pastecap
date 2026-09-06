@@ -478,6 +478,19 @@ private func testPixelColorSampling() throws {
     )
 }
 
+private func testHistoryKeyboardNav() throws {
+    try expect(HistoryKeyboardNav.selectedIndex(afterMovingFrom: 0, count: 5, delta: 1) == 1, "moving down from the first item failed")
+    try expect(HistoryKeyboardNav.selectedIndex(afterMovingFrom: 4, count: 5, delta: 1) == 4, "selection should clamp at the last item")
+    try expect(HistoryKeyboardNav.selectedIndex(afterMovingFrom: 0, count: 5, delta: -1) == 0, "selection should clamp at the first item")
+    try expect(HistoryKeyboardNav.selectedIndex(afterMovingFrom: nil, count: 3, delta: -1) == 0, "moving up without a selection should land on the first item")
+    try expect(HistoryKeyboardNav.selectedIndex(afterMovingFrom: nil, count: 3, delta: 1) == 0, "moving down without a selection should land on the first item")
+    try expect(HistoryKeyboardNav.selectedIndex(afterMovingFrom: 0, count: 0, delta: 1) == nil, "empty list must not produce a selection")
+
+    try expect(HistoryKeyboardNav.selectionAfterRemoval(index: 2, remainingCount: 4) == 2, "removing a middle item should keep the visual position")
+    try expect(HistoryKeyboardNav.selectionAfterRemoval(index: 4, remainingCount: 4) == 3, "removing the last item should move selection up")
+    try expect(HistoryKeyboardNav.selectionAfterRemoval(index: 0, remainingCount: 0) == nil, "removing everything must clear the selection")
+}
+
 private func testSmartItemDetection() throws {
     let urlItem = ClipboardItem(
         id: UUID(),
@@ -542,6 +555,7 @@ do {
     try testHotKeySettings()
     try testAnnotationRendering()
     try testPixelColorSampling()
+    try testHistoryKeyboardNav()
     try testSupportDirectoryName()
     try testSmartItemDetection()
     print("PASS: \(passed) assertions")

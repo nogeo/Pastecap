@@ -35,6 +35,7 @@
   - 📝 **多行文本与代码**：智能显示行数与字符数角标，舒适自然换行排版。
   - 🖼️ **图片与截图**：高质量居中缩略图，智能标注图片格式与文件大小。
 - **分类筛选胶囊栏**：一键在 `全部`、`文本`、`图片` 之间无缝切换，并支持毫秒级混合关键词搜索。
+- **全键盘高效操作**：打开即聚焦搜索框，直接打字筛选；<kbd>↑</kbd><kbd>↓</kbd> 在卡片间移动高亮，<kbd>↵ Enter</kbd> 复制选中项并收起窗口，<kbd>⌘ Cmd</kbd>+<kbd>1-9</kbd> 直取第 N 条复制，<kbd>⌦</kbd> 删除选中项，<kbd>⎋ Esc</kbd> 关闭窗口——全程双手不离键盘。
 - **轻量零抖动复制**：点击整行即刻复制，卡片微光脉冲反馈后自动收起窗口并把焦点还给之前的应用，直接 <kbd>⌘ Cmd</kbd> + <kbd>V</kbd> 粘贴。
 
 ---
@@ -74,6 +75,10 @@
 | 功能 | 默认快捷键 | 说明 |
 | :--- | :--- | :--- |
 | **打开剪贴板** | <kbd>⇧ Shift</kbd> + <kbd>⌘ Cmd</kbd> + <kbd>V</kbd> | 呼出/隐藏剪贴板主窗口 |
+| **列表导航** | <kbd>↑</kbd> <kbd>↓</kbd> | 在历史卡片间移动高亮 |
+| **复制选中项** | <kbd>↵ Enter</kbd> | 复制高亮条目并收起窗口 |
+| **直取第 N 条** | <kbd>⌘ Cmd</kbd> + <kbd>1-9</kbd> | 无需移动高亮，直接复制对应条目 |
+| **删除选中项** | <kbd>⌦ Fn+Delete</kbd> | 删除当前高亮的历史记录 |
 | **区域截图** | <kbd>⌃ Control</kbd> + <kbd>⌘ Cmd</kbd> + <kbd>C</kbd> | 立即进入全屏选区截图模式 |
 | **完成并复制** | <kbd>↵ Enter</kbd> / <kbd>⌘ Cmd</kbd> + <kbd>C</kbd> | 截图完成后复制到剪贴板 |
 | **复制像素色值** | <kbd>C</kbd> | 截图过程中把光标下像素的 `#HEX` 色值复制到剪贴板 |
@@ -86,16 +91,24 @@
 
 ## 📦 编译与打包
 
-```sh
-# 本地编译调试
-swift build
+日常开发请打开 **`Pastecap.xcodeproj`**，选择 **Pastecap → My Mac**，按 **⌘R**。这是标准 macOS App target，Xcode 直接完成编译、资源打包、签名及 LLDB 调试，无需 Scheme 打包脚本。
 
-# 执行全部自动化测试 (70 项断言)
+Debug 使用本机的 `Pastecap Local` 证书，开发包固定输出到 `.build/xcode-dev/Pastecap.app`，沿用 `com.wwm.Pastecap` 标识符。开发 entitlements 允许断点调试，Release 禁止调试器附加。首次在新电脑开发时，可运行 `./scripts/sign-dev.sh` 创建本地证书；不要每次构建重新创建证书。
+
+```sh
+# 命令行构建并启动同一个开发应用
+./scripts/run-dev.sh
+
+# 执行已有的自动化测试
 ./scripts/run-tests.sh
 
-# 构建生成 Release 安装包 (dist/Pastecap.dmg)
+# 使用原生 App target 构建 Release 安装包 (dist/Pastecap.dmg)
 ./scripts/build-dmg.sh
 ```
+
+屏幕录制授权后，在 Xcode 停止并再次运行即可。文件选择窗口中可按 ⌘⇧G 输入项目的 `.build/xcode-dev` 完整路径。切换证书或另一份应用时，系统可能要求重新授权。
+
+`Package.swift` 保留用于 SwiftPM 命令行兼容；直接打开它运行仍是裸可执行程序。需要应用打包与权限支持时，请使用 `Pastecap.xcodeproj`。项目配置使用相对路径，移动项目后无需修改 Scheme。
 
 ---
 

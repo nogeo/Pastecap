@@ -160,7 +160,7 @@ final class ClipboardStore: ObservableObject {
         directory = base
         indexURL = directory.appendingPathComponent("history.json")
         let savedLimit = defaults.integer(forKey: "maxItems")
-        maxItems = savedLimit > 0 ? savedLimit : 50
+        maxItems = savedLimit > 0 ? savedLimit : 20
         thumbnailCache.countLimit = 80
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         if let data = try? Data(contentsOf: indexURL),

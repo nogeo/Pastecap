@@ -9,6 +9,7 @@ CLANG_MODULE_CACHE_PATH="$ROOT/.build/module-cache" swiftc \
   "$ROOT/Sources/Pastecap/Models.swift" \
   "$ROOT/Sources/Pastecap/HotKeyManager.swift" \
   "$ROOT/Sources/Pastecap/Screenshot.swift" \
+  "$ROOT/Sources/Pastecap/HistoryView.swift" \
   "$ROOT/Tests/PastecapTests/main.swift" \
   -o "$OUTPUT"
 "$OUTPUT"

@@ -783,7 +783,7 @@ final class CaptureView: NSView {
     private weak var colorDivider: NSView?
     private lazy var optionsRow: NSView = makeOptionsRow()
     private var textField: NSTextField?
-    private var textOrigin = CGPoint.zero
+    private var textInsertionPoint: CGPoint?
 
     init(snapshot: CGImage, viewSize: CGSize, regionMap: ScreenRegionMap, controller: ScreenshotController) {
         self.snapshotCG = snapshot
@@ -1226,10 +1226,11 @@ final class CaptureView: NSView {
 
     private func beginTextEditing(at point: CGPoint) {
         commitTextEditing()
-        textOrigin = point
         let width = min(280, max(80, bounds.maxX - point.x - 8))
-        let fieldHeight = thickness.fontSize + 14
-        let field = NSTextField(frame: CGRect(x: point.x, y: point.y - 4, width: width, height: fieldHeight))
+        let font = NSFont.systemFont(ofSize: thickness.fontSize, weight: .semibold)
+        let fieldHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
+        let fieldY = min(max(point.y - fieldHeight / 2, bounds.minY + 2), bounds.maxY - fieldHeight - 2)
+        let field = NSTextField(frame: CGRect(x: point.x, y: fieldY, width: width, height: fieldHeight))
         field.font = NSFont.systemFont(ofSize: thickness.fontSize, weight: .semibold)
         field.textColor = strokeColor
         field.drawsBackground = false
@@ -1240,6 +1241,7 @@ final class CaptureView: NSView {
         field.delegate = self
         addSubview(field)
         textField = field
+        textInsertionPoint = point
         window?.makeFirstResponder(field)
         if let editor = window?.fieldEditor(true, for: field) as? NSTextView {
             editor.insertionPointColor = strokeColor
@@ -1247,21 +1249,48 @@ final class CaptureView: NSView {
             editor.font = NSFont.systemFont(ofSize: thickness.fontSize, weight: .semibold)
             editor.drawsBackground = false
         }
+        alignTextInsertionPoint()
+    }
+
+    /// NSTextField 的编辑器有自己的内边距和行高，不能用外框中心代替光标中心。
+    private func alignTextInsertionPoint() {
+        guard let field = textField, let point = textInsertionPoint,
+              let window,
+              let editor = field.currentEditor() as? NSTextView else { return }
+        field.layoutSubtreeIfNeeded()
+        if let container = editor.textContainer {
+            editor.layoutManager?.ensureLayout(for: container)
+        }
+        let screenRect = editor.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+        guard screenRect.height > 0 else { return }
+        let caret = convert(window.convertFromScreen(screenRect), from: nil)
+        field.setFrameOrigin(CGPoint(
+            x: field.frame.minX + point.x - caret.minX,
+            y: field.frame.minY + point.y - caret.midY
+        ))
     }
 
     @objc private func commitTextEditing() {
         guard let field = textField else { return }
         let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let insertionPoint = textInsertionPoint ?? CGPoint(x: field.frame.minX, y: field.frame.midY)
+        textInsertionPoint = nil
         textField = nil
         field.removeFromSuperview()
         window?.makeFirstResponder(self)
         guard !text.isEmpty else { return }
-        annotations.append(.text(text, textOrigin, currentStyle))
+        // 提交后继续使用点按处作为文字行的左侧中点，不引入输入框内边距。
+        let lineHeight = (text as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: currentStyle.thickness.fontSize, weight: .semibold)
+        ]).height
+        let anchor = CGPoint(x: insertionPoint.x, y: insertionPoint.y - lineHeight / 2)
+        annotations.append(.text(text, anchor, currentStyle))
         needsDisplay = true
     }
 
     private func cancelTextEditing() {
         guard let field = textField else { return }
+        textInsertionPoint = nil
         textField = nil
         field.removeFromSuperview()
         window?.makeFirstResponder(self)
@@ -1463,14 +1492,15 @@ final class CaptureView: NSView {
         guard let field = textField else { return }
         field.textColor = strokeColor
         field.font = NSFont.systemFont(ofSize: thickness.fontSize, weight: .semibold)
-        let fieldHeight = thickness.fontSize + 14
-        field.frame.size.height = fieldHeight
+        let font = NSFont.systemFont(ofSize: thickness.fontSize, weight: .semibold)
+        field.frame.size.height = ceil(NSLayoutManager().defaultLineHeight(for: font))
         if let editor = window?.fieldEditor(false, for: field) as? NSTextView {
             editor.insertionPointColor = strokeColor
             editor.textColor = strokeColor
             editor.font = NSFont.systemFont(ofSize: thickness.fontSize, weight: .semibold)
             editor.setSelectedRange(editor.selectedRange())
         }
+        alignTextInsertionPoint()
     }
 
     private func refreshAnnotationOptions() {

@@ -41,12 +41,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 420, height: 570)
+        popover.contentSize = NSSize(width: 360, height: 480)
         popover.contentViewController = NSHostingController(rootView: HistoryView(
             store: history,
             hotKeySettings: hotKeySettings,
             onScreenshot: { [weak self] in self?.startScreenshot() },
-            onCopied: { [weak self] in self?.closeAfterCopy() }
+            onCopied: { [weak self] in self?.closeAfterCopy() },
+            onCancel: { [weak self] in self?.popover.performClose(nil) }
         ))
     }
 
@@ -59,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 菜单栏应用没有常规窗口：拒绝系统在激活/启动时自动打开的窗口，
     /// 避免弹出空白的 Settings 窗口（如安装后从 Finder 打开时）。
-    func applicationShouldOpenUntitledFile(_ sender: Any) -> Bool { false }
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
 
     @objc private func togglePopover() { popover.isShown ? popover.performClose(nil) : showPopover() }
     private func showPopover() {

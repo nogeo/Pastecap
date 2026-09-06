@@ -5,3 +5,8 @@ dist/
 *.swp
 *~
 .cursor/
+
+# Local Xcode state and convenience link
+xcuserdata/
+*.xcuserstate
+/开发应用
