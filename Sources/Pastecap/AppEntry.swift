@@ -2,12 +2,15 @@ import AppKit
 import SwiftUI
 
 @main
-struct PastecapApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-
-    var body: some Scene {
-        Settings {
-            SettingsView(store: delegate.history, hotKeySettings: delegate.hotKeySettings)
+struct PastecapApp {
+    static func main() {
+        let application = NSApplication.shared
+        let delegate = AppDelegate()
+        application.setActivationPolicy(.accessory)
+        application.delegate = delegate
+        // NSApplication 的 delegate 为弱引用，需覆盖整个事件循环的生命周期。
+        withExtendedLifetime(delegate) {
+            application.run()
         }
     }
 }
@@ -61,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 菜单栏应用没有常规窗口：拒绝系统在激活/启动时自动打开的窗口，
     /// 避免弹出空白的 Settings 窗口（如安装后从 Finder 打开时）。
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { false }
+    func applicationShouldSaveSecureApplicationState(_ app: NSApplication) -> Bool { false }
+    func applicationShouldRestoreSecureApplicationState(_ app: NSApplication) -> Bool { false }
 
     @objc private func togglePopover() { popover.isShown ? popover.performClose(nil) : showPopover() }
     private func showPopover() {
