@@ -30,6 +30,16 @@ enum HistoryKeyboardNav {
         guard remainingCount > 0 else { return nil }
         return min(index, remainingCount - 1)
     }
+
+    /// 仅 ⌘Q，不含 Option / Control / Shift
+    static func isQuitShortcut(character: String, command: Bool, option: Bool = false, control: Bool = false, shift: Bool = false) -> Bool {
+        command && !option && !control && !shift && character.lowercased() == "q"
+    }
+
+    static func isQuitShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        return flags == .command && event.charactersIgnoringModifiers?.lowercased() == "q"
+    }
 }
 
 struct HistoryView: View {
@@ -137,6 +147,16 @@ struct HistoryView: View {
         if press.modifiers.contains(.command),
            let digit = press.characters.first?.wholeNumberValue, (1...9).contains(digit) {
             if copyItemAt(index: digit - 1) { return .handled }
+        }
+        if HistoryKeyboardNav.isQuitShortcut(
+            character: press.characters,
+            command: press.modifiers.contains(.command),
+            option: press.modifiers.contains(.option),
+            control: press.modifiers.contains(.control),
+            shift: press.modifiers.contains(.shift)
+        ) {
+            NSApp.terminate(nil)
+            return .handled
         }
         return .ignored
     }
@@ -384,6 +404,7 @@ struct HistoryView: View {
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
+            .keyboardShortcut("q", modifiers: .command)
             .help("退出 Pastecap")
         }
         .padding(.horizontal, 14)

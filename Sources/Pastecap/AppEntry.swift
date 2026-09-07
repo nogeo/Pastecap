@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        installMainMenu()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let statusImage = Self.makeStatusItemIcon()
         statusItem.button?.image = statusImage
@@ -52,6 +53,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onCopied: { [weak self] in self?.closeAfterCopy() },
             onCancel: { [weak self] in self?.popover.performClose(nil) }
         ))
+        installQuitMonitor()
+    }
+
+    /// LSUIElement 没有菜单栏，系统 ⌘Q 到不了 Quit；本地拦截后主动退出。
+    private func installQuitMonitor() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard HistoryKeyboardNav.isQuitShortcut(event) else { return event }
+            NSApp.terminate(nil)
+            return nil
+        }
+    }
+
+    private func installMainMenu() {
+        let appName = "Pastecap"
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(
+            title: "退出 \(appName)",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        ))
+        appItem.submenu = appMenu
+        NSApp.mainMenu = mainMenu
     }
 
     /// 点击列表项复制后收起窗口，并把焦点还给之前的应用，方便直接 ⌘V 粘贴

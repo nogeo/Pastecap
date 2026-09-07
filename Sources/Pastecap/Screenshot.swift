@@ -304,6 +304,9 @@ enum ScreenshotRenderer {
         let scale = CGFloat(snapshot.width) / max(viewSize.width, 1)
         let pixelRect = ScreenshotGeometry.displayRect(for: selection, screenFrame: CGRect(origin: .zero, size: viewSize), scale: scale)
         guard let crop = snapshot.cropping(to: pixelRect) else { return nil }
+        if annotations.isEmpty {
+            return NSImage(cgImage: crop, size: selection.size)
+        }
 
         // lockFocus 只产出 1x 位图，Retina 下会丢一半像素；这里按快照原生分辨率建位图
         guard let rep = NSBitmapImageRep(
@@ -457,12 +460,14 @@ final class ScreenshotController: NSObject {
         cursorIsPushed = true
     }
 
-    func complete(_ result: NSImage?) {
-        if let result {
-            store.addImage(result, preferredName: "Screenshot-\(Int(Date().timeIntervalSince1970)).png")
-        }
+    func complete(_ result: NSImage?, encodedPNG: (() -> Data?)? = nil) {
         closeCaptureWindows()
         finishSession()
+        if let encodedPNG {
+            store.addPNG(encodedPNG, preferredName: "Screenshot-\(Int(Date().timeIntervalSince1970)).png")
+        } else if let result {
+            store.addImage(result, preferredName: "Screenshot-\(Int(Date().timeIntervalSince1970)).png")
+        }
     }
 
     func pin(_ result: NSImage, at screenRect: CGRect) {
@@ -720,7 +725,7 @@ final class PinnedScreenshotView: NSView {
     @objc private func copyImage() {
         let board = NSPasteboard.general
         board.clearContents()
-        board.writeObjects([image])
+        ImagePNG.copy(image, to: board)
         board.setData(Data(), forType: ClipboardStore.internalPasteboardType)
     }
 
@@ -730,11 +735,7 @@ final class PinnedScreenshotView: NSView {
         savePanel.directoryURL = ScreenshotDestination.resolveSaveDirectory()
         NSApp.activate(ignoringOtherApps: true)
         if savePanel.runModal() == .OK, let url = savePanel.url {
-            if let data = image.tiffRepresentation,
-               let rep = NSBitmapImageRep(data: data),
-               let png = rep.representation(using: .png, properties: [:]) {
-                try? png.write(to: url, options: .atomic)
-            }
+            try? ImagePNG.data(from: image)?.write(to: url, options: .atomic)
         }
     }
 
@@ -1132,9 +1133,9 @@ final class CaptureView: NSView {
         guard hasSelectedRegion, let result = renderedResult() else { return }
         let board = NSPasteboard.general
         board.clearContents()
-        board.writeObjects([result])
+        let encodedPNG = ImagePNG.copy(result, to: board, alpha: .stripAlways)
         board.setData(Data(), forType: ClipboardStore.internalPasteboardType)
-        controller?.complete(result)
+        controller?.complete(result, encodedPNG: encodedPNG)
     }
 
     // MARK: Color picking
@@ -1212,9 +1213,7 @@ final class CaptureView: NSView {
         let folder = ScreenshotDestination.resolveSaveDirectory()
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            guard let data = image.tiffRepresentation,
-                  let bitmap = NSBitmapImageRep(data: data),
-                  let png = bitmap.representation(using: .png, properties: [:]) else { return false }
+            guard let png = ImagePNG.data(from: image) else { return false }
             try png.write(to: folder.appendingPathComponent("Screenshot-\(Int(Date().timeIntervalSince1970)).png"), options: .atomic)
             return true
         } catch {

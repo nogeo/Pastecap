@@ -125,6 +125,69 @@ private func testImagePreferredFileName() throws {
     try expect((store.items.first?.byteCount ?? 0) > 0, "image byte count was not recorded")
 }
 
+private func pngColorType(_ data: Data) -> UInt8? {
+    let signature: [UInt8] = [137, 80, 78, 71, 13, 10, 26, 10]
+    guard data.count > 25, Array(data.prefix(8)) == signature else { return nil }
+    return data[25]
+}
+
+private func makeRGBAImage(width: Int, height: Int, fill: (CGContext) -> Void) throws -> CGImage {
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(
+        data: nil,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else { throw TestFailure(description: "could not create PNG test context") }
+    fill(context)
+    guard let image = context.makeImage() else { throw TestFailure(description: "could not create PNG test image") }
+    return image
+}
+
+private func testImagePNGEncoding() throws {
+    let opaque = try makeRGBAImage(width: 8, height: 8) { context in
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+    }
+    guard let opaquePNG = ImagePNG.data(from: opaque) else {
+        throw TestFailure(description: "opaque PNG encode failed")
+    }
+    try expect(pngColorType(opaquePNG) == 2, "opaque PNG should drop unused alpha, got \(String(describing: pngColorType(opaquePNG)))")
+
+    let transparent = try makeRGBAImage(width: 8, height: 8) { context in
+        context.clear(CGRect(x: 0, y: 0, width: 8, height: 8))
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 2, y: 2, width: 4, height: 4))
+    }
+    guard let transparentPNG = ImagePNG.data(from: transparent) else {
+        throw TestFailure(description: "transparent PNG encode failed")
+    }
+    try expect(pngColorType(transparentPNG) == 6, "transparent PNG must keep alpha, got \(String(describing: pngColorType(transparentPNG)))")
+
+    let image = NSImage(cgImage: opaque, size: NSSize(width: 8, height: 8))
+    let board = NSPasteboard(name: NSPasteboard.Name("PastecapTests-png-\(UUID().uuidString)"))
+    board.clearContents()
+    ImagePNG.copy(image, to: board)
+    let types = board.pasteboardItems?.first?.types ?? []
+    try expect(types.contains(.png), "copy did not put PNG on the pasteboard")
+    try expect(!types.contains(.tiff), "copy item still owns uncompressed TIFF, types=\(types)")
+    try expect(board.data(forType: .png) != nil, "pasteboard PNG payload is missing")
+
+    let context = try TestContext()
+    defer { context.cleanup() }
+    let store = ClipboardStore(directory: context.directory, defaults: context.defaults)
+    store.addImage(image)
+    store.flush()
+    guard let name = store.items.first?.fileName else {
+        throw TestFailure(description: "stored image has no file name")
+    }
+    let stored = try Data(contentsOf: context.directory.appendingPathComponent(name))
+    try expect(pngColorType(stored) == 2, "history PNG should also drop unused alpha")
+}
+
 private func testInternalCopySuppression() throws {
     let context = try TestContext()
     defer { context.cleanup() }
@@ -489,6 +552,31 @@ private func testHistoryKeyboardNav() throws {
     try expect(HistoryKeyboardNav.selectionAfterRemoval(index: 2, remainingCount: 4) == 2, "removing a middle item should keep the visual position")
     try expect(HistoryKeyboardNav.selectionAfterRemoval(index: 4, remainingCount: 4) == 3, "removing the last item should move selection up")
     try expect(HistoryKeyboardNav.selectionAfterRemoval(index: 0, remainingCount: 0) == nil, "removing everything must clear the selection")
+
+    try expect(HistoryKeyboardNav.isQuitShortcut(character: "q", command: true), "⌘Q should quit")
+    try expect(HistoryKeyboardNav.isQuitShortcut(character: "Q", command: true), "⌘Q should match uppercase Q")
+    try expect(!HistoryKeyboardNav.isQuitShortcut(character: "q", command: false), "Q without command must not quit")
+    try expect(!HistoryKeyboardNav.isQuitShortcut(character: "q", command: true, option: true), "⌘⌥Q must not quit")
+    try expect(!HistoryKeyboardNav.isQuitShortcut(character: "q", command: true, control: true), "⌃⌘Q must not quit")
+    try expect(!HistoryKeyboardNav.isQuitShortcut(character: "q", command: true, shift: true), "⇧⌘Q must not quit")
+    try expect(!HistoryKeyboardNav.isQuitShortcut(character: "w", command: true), "⌘W must not quit")
+
+    func keyEvent(flags: NSEvent.ModifierFlags, character: String) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: flags,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: character,
+            charactersIgnoringModifiers: character,
+            isARepeat: false,
+            keyCode: 12
+        )!
+    }
+    try expect(HistoryKeyboardNav.isQuitShortcut(keyEvent(flags: .command, character: "q")), "NSEvent ⌘Q should quit")
+    try expect(!HistoryKeyboardNav.isQuitShortcut(keyEvent(flags: [.command, .shift], character: "q")), "NSEvent ⇧⌘Q must not quit")
 }
 
 private func testSmartItemDetection() throws {
@@ -545,6 +633,7 @@ do {
     try testImagePersistenceAndDeduplication()
     try testImageListTitle()
     try testImagePreferredFileName()
+    try testImagePNGEncoding()
     try testInternalCopySuppression()
     try testSensitivePasteboardIgnored()
     try testScreenshotGeometry()

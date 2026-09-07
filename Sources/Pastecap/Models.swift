@@ -1,7 +1,9 @@
 import AppKit
 import CryptoKit
 import Foundation
+import ImageIO
 import ObjectiveC
+import UniformTypeIdentifiers
 
 enum ClipboardKind: String, Codable { case text, image }
 struct ClipboardItem: Identifiable, Codable, Equatable {
@@ -130,6 +132,159 @@ enum PasteboardPolicy {
     }
 }
 
+/// 截图和剪贴板图片统一写成 PNG：不透明图去掉无用 Alpha，直接走 ImageIO，避免 TIFF 中转。
+enum ImagePNG {
+    enum AlphaPolicy {
+        /// 全不透明则去掉 Alpha；有透明像素则保留。
+        case stripIfOpaque
+        /// 屏幕截图本身不透明，跳过逐像素扫描。
+        case stripAlways
+    }
+
+    static func data(from image: NSImage, alpha: AlphaPolicy = .stripIfOpaque) -> Data? {
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        return data(from: cgImage, alpha: alpha)
+    }
+
+    static func data(from image: CGImage, alpha: AlphaPolicy = .stripIfOpaque) -> Data? {
+        encode(prepared(image, alpha: alpha))
+    }
+
+    /// 立刻在剪贴板上声明 PNG，压缩放到后台。返回的闭包与这次编码共用同一份数据。
+    @discardableResult
+    static func copy(_ image: NSImage, to board: NSPasteboard, alpha: AlphaPolicy = .stripIfOpaque) -> () -> Data? {
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return { nil } }
+        let source = Source(image: cgImage, alpha: alpha)
+        let item = NSPasteboardItem()
+        item.setDataProvider(source, forTypes: [.png])
+        board.writeObjects([item])
+        source.startEncoding()
+        return { source.data() }
+    }
+
+    private static func encode(_ image: CGImage) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
+    }
+
+    private static func prepared(_ image: CGImage, alpha: AlphaPolicy) -> CGImage {
+        switch image.alphaInfo {
+        case .none, .noneSkipLast, .noneSkipFirst:
+            return image
+        default:
+            break
+        }
+        switch alpha {
+        case .stripAlways:
+            return flattenRGB(image) ?? image
+        case .stripIfOpaque:
+            return opaqueRGBIfPossible(image)
+        }
+    }
+
+    private static func flattenRGB(_ image: CGImage) -> CGImage? {
+        let width = image.width
+        let height = image.height
+        guard let context = rgbContext(width: width, height: height, space: colorSpace(for: image), alpha: .noneSkipLast) else { return nil }
+        context.interpolationQuality = .none
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
+
+    private static func opaqueRGBIfPossible(_ image: CGImage) -> CGImage {
+        let width = image.width
+        let height = image.height
+        let space = colorSpace(for: image)
+        guard let context = rgbContext(width: width, height: height, space: space, alpha: .premultipliedLast) else { return image }
+        context.interpolationQuality = .none
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let pixels = context.data else { return context.makeImage() ?? image }
+
+        let bytesPerRow = context.bytesPerRow
+        let pointer = pixels.bindMemory(to: UInt8.self, capacity: bytesPerRow * height)
+        var opaque = true
+        rowLoop: for y in 0..<height {
+            let row = pointer + y * bytesPerRow
+            for x in 0..<width where row[x * 4 + 3] != 255 {
+                opaque = false
+                break rowLoop
+            }
+        }
+        guard opaque else { return context.makeImage() ?? image }
+
+        let copy = Data(bytes: pixels, count: bytesPerRow * height)
+        guard let provider = CGDataProvider(data: copy as CFData) else { return context.makeImage() ?? image }
+        return CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: space,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ) ?? image
+    }
+
+    private static func colorSpace(for image: CGImage) -> CGColorSpace {
+        image.colorSpace.flatMap { $0.numberOfComponents >= 3 ? $0 : nil }
+            ?? CGColorSpace(name: CGColorSpace.sRGB)
+            ?? CGColorSpaceCreateDeviceRGB()
+    }
+
+    private static func rgbContext(width: Int, height: Int, space: CGColorSpace, alpha: CGImageAlphaInfo) -> CGContext? {
+        CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: space,
+            bitmapInfo: alpha.rawValue
+        )
+    }
+
+    private final class Source: NSObject, NSPasteboardItemDataProvider {
+        private let image: CGImage
+        private let alpha: AlphaPolicy
+        private let queue = DispatchQueue(label: "com.wwm.Pastecap.png-encode", qos: .userInitiated)
+        private var cached: Data?
+
+        init(image: CGImage, alpha: AlphaPolicy) {
+            self.image = image
+            self.alpha = alpha
+        }
+
+        func startEncoding() {
+            queue.async { [weak self] in
+                _ = self?.encodeIfNeeded()
+            }
+        }
+
+        func data() -> Data? {
+            queue.sync { encodeIfNeeded() }
+        }
+
+        private func encodeIfNeeded() -> Data? {
+            if let cached { return cached }
+            let encoded = ImagePNG.data(from: image, alpha: alpha)
+            cached = encoded
+            return encoded
+        }
+
+        func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+            guard type == .png, let png = data() else { return }
+            item.setData(png, forType: .png)
+        }
+    }
+}
+
 final class ClipboardStore: ObservableObject {
     static let internalPasteboardType = NSPasteboard.PasteboardType("com.wwm.Pastecap.internal-copy")
     @Published private(set) var items: [ClipboardItem] = []
@@ -184,11 +339,15 @@ final class ClipboardStore: ObservableObject {
     }
 
     func addImage(_ image: NSImage, preferredName: String? = nil) {
-        guard let tiff = image.tiffRepresentation else { return }
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        addPNG({ ImagePNG.data(from: cgImage) }, preferredName: preferredName)
+    }
+
+    func addPNG(_ provider: @escaping () -> Data?, preferredName: String? = nil) {
         pendingImageOps += 1
         ioQueue.async { [weak self] in
             guard let self else { return }
-            guard let png = Self.encodePNG(fromTIFF: tiff) else {
+            guard let png = provider() else {
                 DispatchQueue.main.async { self.finishImageOp() }
                 return
             }
@@ -247,8 +406,11 @@ final class ClipboardStore: ObservableObject {
         if item.kind == .text, let text = item.text {
             board.setString(text, forType: .string)
         }
-        if item.kind == .image, let image = image(for: item) {
-            board.writeObjects([image])
+        if item.kind == .image, let name = item.fileName,
+           let png = try? Data(contentsOf: directory.appendingPathComponent(name)) {
+            let pasteItem = NSPasteboardItem()
+            pasteItem.setData(png, forType: .png)
+            board.writeObjects([pasteItem])
         }
         board.setData(Data(), forType: Self.internalPasteboardType)
     }
@@ -373,11 +535,6 @@ final class ClipboardStore: ObservableObject {
         saveWorkItem = nil
         guard let data = try? JSONEncoder().encode(items) else { return }
         try? data.write(to: indexURL, options: .atomic)
-    }
-
-    private static func encodePNG(fromTIFF tiff: Data) -> Data? {
-        guard let rep = NSBitmapImageRep(data: tiff) else { return nil }
-        return rep.representation(using: .png, properties: [:])
     }
 
     private static func makeThumbnail(_ image: NSImage, fitting size: CGSize) -> NSImage {
