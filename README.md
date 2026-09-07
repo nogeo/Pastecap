@@ -62,13 +62,13 @@
 ## 💻 安装要求
 
 - **操作系统**：macOS 14.0（Sonoma）或更高版本。
-- **处理器**：当前 Releases 提供的 `Pastecap.dmg` 为 Apple Silicon（`arm64`）构建，适用于 M1 及更新的 Apple 芯片 Mac；Intel Mac 暂无预编译安装包。
+- **处理器**：Apple Silicon（M 系列）选择 `Pastecap-arm64.dmg`；64 位 Intel 选择 `Pastecap-x86_64.dmg`。从 v0.2.4 开始提供两种架构的独立安装包。
 - **屏幕录制权限**：剪贴板历史无需额外权限；区域截图首次使用时，需要在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 Pastecap。
 - **网络与账号**：不需要网络连接或账号，剪贴板历史和截图均保存在本机。
 
 ### 安装方式
 
-打开 Release 中的 `Pastecap.dmg`，将 **Pastecap** 拖入 **Applications** 文件夹即可。当前安装包使用 ad-hoc 签名（未经过 Apple 公证）；首次打开若提示“无法验证开发者”，请按住 Control 点按应用并选择「打开」，或在「系统设置 › 隐私与安全性」中允许打开。
+打开 Release 中与你的处理器对应的 DMG，将 **Pastecap** 拖入 **Applications** 文件夹即可。当前安装包使用 ad-hoc 签名（未经过 Apple 公证）；首次打开若提示“无法验证开发者”，请按住 Control 点按应用并选择「打开」，或在「系统设置 › 隐私与安全性」中允许打开。
 
 ## ⌨️ 默认快捷键
 
@@ -102,8 +102,19 @@ Debug 使用本机的 `Pastecap Local` 证书，开发包固定输出到 `.build
 # 执行已有的自动化测试
 ./scripts/run-tests.sh
 
-# 使用原生 App target 构建 Release 安装包 (dist/Pastecap.dmg)
+# 构建当前机器架构的 Release 安装包
 ./scripts/build-dmg.sh
+
+# 分别构建 Apple Silicon / 64 位 Intel，或一次生成两份
+./scripts/build-dmg.sh arm64
+./scripts/build-dmg.sh x86_64
+./scripts/build-dmg.sh all
+# 输出：dist/Pastecap-arm64.dmg、dist/Pastecap-x86_64.dmg
+# App 分别保存在 dist/arm64/ 和 dist/x86_64/，两份产物互不覆盖。
+
+# 测试默认使用本机架构；Apple Silicon 上测试 Intel 版本需已安装 Rosetta 2
+./scripts/run-tests.sh
+./scripts/run-tests.sh x86_64
 ```
 
 屏幕录制授权后，在 Xcode 停止并再次运行即可。文件选择窗口中可按 ⌘⇧G 输入项目的 `.build/xcode-dev` 完整路径。切换证书或另一份应用时，系统可能要求重新授权。
@@ -112,13 +123,25 @@ Debug 使用本机的 `Pastecap Local` 证书，开发包固定输出到 `.build
 
 ---
 
+## v0.2.4 更新
+
+- 新增 64 位 Intel（x86_64）独立 DMG，保留 Apple Silicon（arm64）独立 DMG，两者均要求 macOS 14 或更新版本。
+- 图片缩略图改为后台降采样加载并缓存，减少首次打开时的主线程工作。
+- 长文本预览限长，缓存显示信息；复制和保存仍保留全文。
+- 历史记录改为后台串行保存，退出时等待写入完成；历史未变化时启动不再重复写盘。
+- 减少重复焦点设置和日期格式化开销，剪贴板检查延后至弹窗展示调用之后。
+
+完整说明见 [v0.2.4 发布说明](docs/releases/v0.2.4.md)。
+
 ## 🚀 GitHub Release 自动发布
 
-向仓库推送一个 `v*` 格式的 tag，GitHub Actions 会自动编译 `Pastecap.dmg` 并挂载发布到 [Releases](https://github.com/nogeo/Pastecap/releases)：
+向仓库推送一个 `v*` 格式的 tag，GitHub Actions 会自动编译 `Pastecap-arm64.dmg` 和 `Pastecap-x86_64.dmg` 并挂载发布到 [Releases](https://github.com/nogeo/Pastecap/releases)：
+
+发布前更新 `Packaging/Info.plist` 的版本号，并添加与标签同名的 `docs/releases/<tag>.md`；自动发布会使用该文件作为 Release 说明。
 
 ```sh
-git tag v1.2.0
-git push origin v1.2.0
+git tag -a v0.2.4 -m "Release v0.2.4"
+git push origin main v0.2.4
 ```
 
 ---

@@ -1,10 +1,27 @@
 #!/bin/sh
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD="$ROOT/.build/xcode-release/Build/Products/Release"
-APP="$ROOT/dist/Pastecap.app"
-DMG="$ROOT/dist/Pastecap.dmg"
-STAGE="$ROOT/.dmg-staging"
+# Usage: build-dmg.sh [arm64|x86_64|all]; defaults to the host architecture.
+ARCH="${1:-$(uname -m)}"
+if [ "$#" -gt 1 ]; then
+  echo "Usage: $0 [arm64|x86_64|all]" >&2
+  exit 2
+fi
+case "$ARCH" in
+  all)
+    "$0" arm64
+    "$0" x86_64
+    exit 0
+    ;;
+  arm64|x86_64) ;;
+  *) echo "Unsupported architecture: $ARCH (use arm64, x86_64, or all)" >&2; exit 2 ;;
+esac
+DERIVED="$ROOT/.build/xcode-release-$ARCH"
+BUILD="$DERIVED/Build/Products/Release"
+APP="$ROOT/dist/$ARCH/Pastecap.app"
+DMG="$ROOT/dist/Pastecap-$ARCH.dmg"
+STAGE="$(mktemp -d "$ROOT/.build-dmg-$ARCH.XXXXXX")"
+trap 'rm -rf "$STAGE"' EXIT
 ENTITLEMENTS="$ROOT/Packaging/Pastecap.entitlements"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 
@@ -12,14 +29,19 @@ IDENTITY="${CODESIGN_IDENTITY:--}"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/Packaging/Info.plist")"
 COMMITS_COUNT="$(git rev-list --count HEAD 2>/dev/null || echo "1")"
 
-rm -rf "$ROOT/dist"
-rm -rf "$STAGE"
+rm -rf "$APP"
 mkdir -p "$ROOT/dist" "$APP/Contents/MacOS" "$APP/Contents/Resources" "$STAGE"
 "$ROOT/scripts/generate-icons.sh"
 xcodebuild -project "$ROOT/Pastecap.xcodeproj" -scheme Pastecap \
-  -configuration Release -destination "platform=macOS,arch=$(uname -m)" \
-  -derivedDataPath "$ROOT/.build/xcode-release" build
+  -configuration Release -destination "generic/platform=macOS" \
+  ARCHS="$ARCH" ONLY_ACTIVE_ARCH=NO \
+  -derivedDataPath "$DERIVED" build
 ditto "$BUILD/Pastecap.app" "$APP"
+ACTUAL_ARCH="$(lipo -archs "$APP/Contents/MacOS/Pastecap")"
+if [ "$ACTUAL_ARCH" != "$ARCH" ]; then
+  echo "Expected $ARCH binary, found: $ACTUAL_ARCH" >&2
+  exit 1
+fi
 ditto "$ROOT/Assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 ditto "$ROOT/Packaging/PrivacyInfo.xcprivacy" "$APP/Contents/Resources/PrivacyInfo.xcprivacy"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
@@ -36,6 +58,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>CFBundleIconName</key><string>AppIcon</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>CFBundleVersion</key><string>$COMMITS_COUNT</string>
@@ -86,8 +109,6 @@ if [ -n "${NOTARY_PROFILE:-}" ]; then
   spctl --assess --type open --context context:primary-signature -v "$DMG" || true
 fi
 
-# Nudge LaunchServices / Finder to pick up the new bundle icon.
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
 echo "Created $DMG"
 if [ "$IDENTITY" = "-" ]; then
   echo "Local DMG is ad-hoc signed. For website distribution:"

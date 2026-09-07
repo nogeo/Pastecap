@@ -96,10 +96,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePopover() { popover.isShown ? popover.performClose(nil) : showPopover() }
     private func showPopover() {
-        monitor.check()
         guard let button = statusItem.button else { return }
         if !popover.isShown { popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) }
         NSApp.activate(ignoringOtherApps: true)
+        // Let the popover presentation run before requesting new pasteboard data.
+        DispatchQueue.main.async { [weak self] in self?.monitor.check() }
     }
     private func startScreenshot() {
         guard popover.isShown else {

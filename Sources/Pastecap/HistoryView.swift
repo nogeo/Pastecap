@@ -80,8 +80,8 @@ struct HistoryView: View {
         { filter in
             switch filter {
             case .all: return store.items.count
-            case .text: return store.items.filter { $0.kind == .text }.count
-            case .image: return store.items.filter { $0.kind == .image }.count
+            case .text: return store.items.reduce(0) { $0 + ($1.kind == .text ? 1 : 0) }
+            case .image: return store.items.reduce(0) { $0 + ($1.kind == .image ? 1 : 0) }
             }
         }
     }
@@ -113,7 +113,6 @@ struct HistoryView: View {
         } message: {
             Text("此操作无法撤销。")
         }
-        .onAppear { prepareForKeyboardUse() }
         // 每次弹出窗口都重置为「搜索框聚焦 + 高亮第一条」，直接打字即可筛选
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didShowNotification)) { _ in
             prepareForKeyboardUse()
@@ -338,11 +337,11 @@ struct HistoryView: View {
                     ScrollView {
                         LazyVStack(spacing: 5) {
                             ForEach(filtered) { item in
-                                HistoryCardRow(
+                                HistoryAsyncCardRow(
+                                    store: store,
                                     item: item,
                                     isSelected: selectedID == item.id,
                                     isCopied: copiedItemID == item.id,
-                                    thumbnail: item.kind == .image ? store.thumbnail(for: item, size: CGSize(width: 52, height: 42)) : nil,
                                     onCopy: { copyWithFeedback(item) },
                                     onRemove: { store.remove(item) }
                                 )
@@ -430,6 +429,29 @@ struct HistoryView: View {
 }
 
 // MARK: - Modern History Card Row
+
+/// Each visible row owns its loading task; selection changes reuse its thumbnail.
+private struct HistoryAsyncCardRow: View {
+    let store: ClipboardStore
+    let item: ClipboardItem
+    let isSelected: Bool
+    let isCopied: Bool
+    let onCopy: () -> Void
+    let onRemove: () -> Void
+    @Environment(\.displayScale) private var displayScale
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        HistoryCardRow(item: item, isSelected: isSelected, isCopied: isCopied,
+                       thumbnail: thumbnail, onCopy: onCopy, onRemove: onRemove)
+            .task(id: displayScale) {
+                guard item.kind == .image else { return }
+                let loaded = await store.thumbnail(for: item, size: CGSize(width: 52, height: 42), scale: displayScale)
+                guard !Task.isCancelled else { return }
+                thumbnail = loaded
+            }
+    }
+}
 
 struct HistoryCardRow: View, Equatable {
     let item: ClipboardItem

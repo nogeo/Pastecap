@@ -48,6 +48,74 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         return "\(Int(value.rounded()))" + unit
     }
 
+    private static let presentationCache: NSCache<NSUUID, ClipboardTextPresentation> = {
+        let cache = NSCache<NSUUID, ClipboardTextPresentation>()
+        cache.countLimit = 1000
+        cache.totalCostLimit = 16 * 1024 * 1024
+        return cache
+    }()
+
+    private var presentation: ClipboardTextPresentation {
+        let key = id as NSUUID
+        if let cached = Self.presentationCache.object(forKey: key), cached.sourceText == text { return cached }
+        let value = ClipboardTextPresentation(text: text)
+        Self.presentationCache.setObject(value, forKey: key, cost: text?.utf8.count ?? 0)
+        return value
+    }
+
+    var isURL: Bool { presentation.isURL }
+    var hexColor: NSColor? { presentation.hexColor }
+    var isMultiline: Bool { presentation.isMultiline }
+    var lineCount: Int { presentation.lineCount }
+    var characterCount: Int { presentation.characterCount }
+    var previewSnippet: String { presentation.previewSnippet }
+
+    private static let yesterdayFormatter = makeDateFormatter("昨天 HH:mm")
+    private static let dateFormatter = makeDateFormatter("MM-dd HH:mm")
+
+    private static func makeDateFormatter(_ format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateFormat = format
+        formatter.timeZone = .autoupdatingCurrent
+        return formatter
+    }
+
+    var relativeTimeString: String {
+        let now = Date()
+        let diff = now.timeIntervalSince(createdAt)
+        if diff < 60 { return "刚刚" }
+        if diff < 3600 { return "\(Int(diff / 60))分钟前" }
+        if diff < 86400 { return "\(Int(diff / 3600))小时前" }
+        if Calendar.current.isDateInYesterday(createdAt) {
+            return Self.yesterdayFormatter.string(from: createdAt)
+        }
+        return Self.dateFormatter.string(from: createdAt)
+    }
+}
+
+/// Immutable display metadata is reused across selection, hover, and list updates.
+private final class ClipboardTextPresentation {
+    let sourceText: String?
+    let isURL: Bool
+    let hexColor: NSColor?
+    let isMultiline: Bool
+    let lineCount: Int
+    let characterCount: Int
+    let previewSnippet: String
+    init(text: String?) {
+        sourceText = text
+        let source = ClipboardTextSource(text: text)
+        isURL = source.isURL
+        hexColor = source.hexColor
+        isMultiline = source.isMultiline
+        lineCount = source.lineCount
+        characterCount = source.characterCount
+        previewSnippet = source.previewSnippet
+    }
+}
+
+private struct ClipboardTextSource {
+    let text: String?
     var isURL: Bool {
         guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return false }
         guard text.hasPrefix("http://") || text.hasPrefix("https://") else { return false }
@@ -97,24 +165,10 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     var previewSnippet: String {
         guard let text else { return "" }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed
+        let prefix = trimmed.prefix(500)
+        return prefix.endIndex < trimmed.endIndex ? String(prefix) + "…" : String(prefix)
     }
 
-    var relativeTimeString: String {
-        let now = Date()
-        let diff = now.timeIntervalSince(createdAt)
-        if diff < 60 { return "刚刚" }
-        if diff < 3600 { return "\(Int(diff / 60))分钟前" }
-        if diff < 86400 { return "\(Int(diff / 3600))小时前" }
-        if Calendar.current.isDateInYesterday(createdAt) {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "昨天 HH:mm"
-            return formatter.string(from: createdAt)
-        }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MM-dd HH:mm"
-        return formatter.string(from: createdAt)
-    }
 }
 
 enum PasteboardPolicy {
@@ -299,9 +353,12 @@ final class ClipboardStore: ObservableObject {
     private let indexURL: URL
     private let defaults: UserDefaults
     private let ioQueue = DispatchQueue(label: "com.wwm.Pastecap.store-io", qos: .utility)
+    private let saveQueue = DispatchQueue(label: "com.wwm.Pastecap.history-save", qos: .utility)
     private var saveWorkItem: DispatchWorkItem?
     private var pendingImageOps = 0
+    private let thumbnailQueue = DispatchQueue(label: "com.wwm.Pastecap.thumbnails", qos: .userInitiated)
     private let thumbnailCache = NSCache<NSString, NSImage>()
+    private var thumbnailKeys: [String: Set<String>] = [:]
 
     static func supportDirectory(
         in base: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -318,18 +375,25 @@ final class ClipboardStore: ObservableObject {
         maxItems = savedLimit > 0 ? savedLimit : 20
         thumbnailCache.countLimit = 80
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var originalItems: [ClipboardItem] = []
         if let data = try? Data(contentsOf: indexURL),
            let decoded = try? JSONDecoder().decode([ClipboardItem].self, from: data) {
+            originalItems = decoded
             var fingerprints = Set<String>()
             items = decoded.compactMap(migratedItem).filter { fingerprints.insert($0.fingerprint).inserted }
         }
         trim()
-        saveNow()
+        if items != originalItems { scheduleSave() }
     }
 
     deinit {
+        let hasPendingSave = saveWorkItem != nil
         saveWorkItem?.cancel()
-        saveNow()
+        let snapshot = items
+        let destination = indexURL
+        saveQueue.sync {
+            if hasPendingSave { Self.writeHistory(snapshot, to: destination) }
+        }
     }
 
     func addText(_ value: String) {
@@ -391,13 +455,33 @@ final class ClipboardStore: ObservableObject {
         return NSImage(contentsOf: directory.appendingPathComponent(name))
     }
 
-    func thumbnail(for item: ClipboardItem, size: CGSize = CGSize(width: 54, height: 44)) -> NSImage? {
-        guard item.kind == .image, let name = item.fileName else { return nil }
-        let key = "\(name)-\(Int(size.width))x\(Int(size.height))" as NSString
+    /// Keep file reads and image decoding off the UI thread, including the first display.
+    @MainActor
+    func thumbnail(for item: ClipboardItem, size: CGSize = CGSize(width: 54, height: 44), scale: CGFloat = 2) async -> NSImage? {
+        guard item.kind == .image, let name = item.fileName,
+              size.width > 0, size.height > 0, scale > 0,
+              !Task.isCancelled else { return nil }
+        let key = "\(name)-\(size.width)x\(size.height)@\(scale)" as NSString
         if let cached = thumbnailCache.object(forKey: key) { return cached }
-        guard let full = image(for: item) else { return nil }
-        let thumb = Self.makeThumbnail(full, fitting: size)
+        let url = directory.appendingPathComponent(name)
+        let maxPixels = max(1, Int(ceil(max(size.width, size.height) * scale)))
+        let decoded: CGImage? = await withCheckedContinuation { continuation in
+            thumbnailQueue.async {
+                let image = autoreleasepool {
+                    Self.makeThumbnail(at: url, maxPixels: maxPixels)
+                }
+                continuation.resume(returning: image)
+            }
+        }
+        // A row may have disappeared or been deleted while decoding was in flight.
+        guard !Task.isCancelled, items.contains(where: { $0.id == item.id }),
+              let decoded else { return nil }
+        if let cached = thumbnailCache.object(forKey: key) { return cached }
+        let thumb = NSImage(cgImage: decoded, size: NSSize(
+            width: CGFloat(decoded.width) / scale, height: CGFloat(decoded.height) / scale
+        ))
         thumbnailCache.setObject(thumb, forKey: key)
+        thumbnailKeys[name, default: []].insert(key as String)
         return thumb
     }
 
@@ -429,6 +513,7 @@ final class ClipboardStore: ObservableObject {
         }
         items.removeAll()
         thumbnailCache.removeAllObjects()
+        thumbnailKeys.removeAll()
         scheduleSave()
     }
 
@@ -447,6 +532,7 @@ final class ClipboardStore: ObservableObject {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
         saveNow()
+        saveQueue.sync {}
     }
 
     private func finishImageOp(_ body: () -> Void = {}) {
@@ -479,8 +565,9 @@ final class ClipboardStore: ObservableObject {
 
     private func invalidateThumbnail(for item: ClipboardItem) {
         guard let name = item.fileName else { return }
-        thumbnailCache.removeObject(forKey: "\(name)-54x44" as NSString)
-        thumbnailCache.removeObject(forKey: "\(name)-52x42" as NSString)
+        for key in thumbnailKeys.removeValue(forKey: name) ?? [] {
+            thumbnailCache.removeObject(forKey: key as NSString)
+        }
     }
 
     private func migratedItem(_ item: ClipboardItem) -> ClipboardItem? {
@@ -533,49 +620,26 @@ final class ClipboardStore: ObservableObject {
     private func saveNow() {
         saveWorkItem?.cancel()
         saveWorkItem = nil
-        guard let data = try? JSONEncoder().encode(items) else { return }
-        try? data.write(to: indexURL, options: .atomic)
+        let snapshot = items
+        let destination = indexURL
+        saveQueue.async { Self.writeHistory(snapshot, to: destination) }
     }
 
-    private static func makeThumbnail(_ image: NSImage, fitting size: CGSize) -> NSImage {
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
-        let pixelWidth = max(1, Int((size.width * scale).rounded()))
-        let pixelHeight = max(1, Int((size.height * scale).rounded()))
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: pixelWidth,
-            pixelsHigh: pixelHeight,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 0
-        ) else {
-            return image
-        }
-        rep.size = size
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        NSGraphicsContext.current?.imageInterpolation = .medium
-        let canvas = CGRect(origin: .zero, size: size)
-        NSColor.clear.setFill()
-        canvas.fill()
-        let imageSize = image.size
-        let scaleFit = min(size.width / max(imageSize.width, 1), size.height / max(imageSize.height, 1))
-        let drawSize = CGSize(width: imageSize.width * scaleFit, height: imageSize.height * scaleFit)
-        let drawRect = CGRect(
-            x: (size.width - drawSize.width) / 2,
-            y: (size.height - drawSize.height) / 2,
-            width: drawSize.width,
-            height: drawSize.height
-        )
-        image.draw(in: drawRect)
-        NSGraphicsContext.restoreGraphicsState()
-        let thumb = NSImage(size: size)
-        thumb.addRepresentation(rep)
-        return thumb
+    private static func writeHistory(_ snapshot: [ClipboardItem], to destination: URL) {
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: destination, options: .atomic)
+    }
+
+    private static func makeThumbnail(at url: URL, maxPixels: Int) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [
+            kCGImageSourceShouldCache: false
+        ] as CFDictionary) else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+            kCGImageSourceShouldCacheImmediately: true
+        ] as CFDictionary)
     }
 }
 

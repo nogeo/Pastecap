@@ -74,17 +74,33 @@ private func testImagePersistenceAndDeduplication() throws {
     let context = try TestContext()
     defer { context.cleanup() }
     let store = ClipboardStore(directory: context.directory, defaults: context.defaults)
-    let image = NSImage(size: NSSize(width: 8, height: 8))
+    let image = NSImage(size: NSSize(width: 800, height: 400))
     image.lockFocus()
     NSColor.systemRed.setFill()
-    NSRect(x: 0, y: 0, width: 8, height: 8).fill()
+    NSRect(x: 0, y: 0, width: 800, height: 400).fill()
     image.unlockFocus()
     store.addImage(image)
     store.addImage(image)
     store.flush()
     try expect(store.items.count == 1, "identical image was duplicated")
     try expect(store.image(for: store.items[0]) != nil, "stored image could not be loaded")
-    try expect(store.thumbnail(for: store.items[0]) != nil, "thumbnail could not be generated")
+    var thumbnailFinished = false
+    var loadedThumbnail: NSImage?
+    var cachedThumbnail: NSImage?
+    Task { @MainActor in
+        loadedThumbnail = await store.thumbnail(for: store.items[0])
+        cachedThumbnail = await store.thumbnail(for: store.items[0])
+        thumbnailFinished = true
+    }
+    let deadline = Date().addingTimeInterval(5)
+    while !thumbnailFinished, Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+    }
+    try expect(thumbnailFinished && loadedThumbnail != nil, "async thumbnail could not be generated")
+    try expect(loadedThumbnail === cachedThumbnail, "thumbnail cache did not reuse the image")
+    if let rep = loadedThumbnail?.representations.first {
+        try expect(rep.pixelsWide == 108 && rep.pixelsHigh == 54, "thumbnail downsampling did not preserve size and aspect ratio")
+    }
     store.flush()
     try expect(ClipboardStore(directory: context.directory, defaults: context.defaults).items.count == 1, "image did not survive restart")
     try expect(store.cacheSizeBytes() > 0, "cache size did not include persisted files")
@@ -618,6 +634,38 @@ private func testSmartItemDetection() throws {
     try expect(multilineItem.lineCount == 3, "line count mismatch")
 }
 
+private func testLongTextPreviewAndPersistence() throws {
+    let context = try TestContext()
+    defer { context.cleanup() }
+    let store = ClipboardStore(directory: context.directory, defaults: context.defaults)
+    let original = String(repeating: "你好👨‍👩‍👧‍👦\n", count: 2000)
+    store.addText(original)
+    let item = store.items[0]
+    try expect(item.previewSnippet.count == 501 && item.previewSnippet.hasSuffix("…"), "long preview was not bounded")
+    try expect(item.characterCount == original.count && item.lineCount == 2000, "display metadata lost full text counts")
+    let board = NSPasteboard.withUniqueName()
+    defer { board.releaseGlobally() }
+    store.copy(item, to: board)
+    try expect(board.string(forType: .string) == original, "preview truncation affected copied text")
+    store.flush()
+    let index = context.directory.appendingPathComponent("history.json")
+    let before = try Data(contentsOf: index)
+    let modifiedBefore = try index.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    let restored = ClipboardStore(directory: context.directory, defaults: context.defaults)
+    try expect(restored.items[0].text == original, "preview truncation affected persisted text")
+    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    let after = try Data(contentsOf: index)
+    let modifiedAfter = try index.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    try expect(after == before && modifiedAfter == modifiedBefore, "unchanged history was modified during startup")
+    // Queue an older save, then ensure flush persists the newest snapshot last.
+    store.addText("older")
+    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    store.addText("newest")
+    store.flush()
+    let decoded = try JSONDecoder().decode([ClipboardItem].self, from: Data(contentsOf: index))
+    try expect(decoded.first?.text == "newest", "queued save overwrote the flushed snapshot")
+}
+
 private func testSupportDirectoryName() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("PastecapSupport-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -645,6 +693,7 @@ do {
     try testAnnotationRendering()
     try testPixelColorSampling()
     try testHistoryKeyboardNav()
+    try testLongTextPreviewAndPersistence()
     try testSupportDirectoryName()
     try testSmartItemDetection()
     print("PASS: \(passed) assertions")
