@@ -113,8 +113,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        history.flush()
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !history.flush() else { return .terminateNow }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "部分剪贴板记录尚未保存"
+        alert.informativeText = history.historySaveError ?? history.imageSaveError
+            ?? "后台图片处理尚未完成。取消退出可继续等待，仍然退出可能丢失未保存的记录。"
+        alert.addButton(withTitle: "取消退出")
+        alert.addButton(withTitle: "仍然退出")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
     }
 
     /// 矢量动态绘制 MenuBar 专用图标（18x18 Template 图标：层叠文档 + 右上角剪刀）

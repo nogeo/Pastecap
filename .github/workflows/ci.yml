@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check native architecture
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
+      - name: Build and run tests
+        run: scripts/run-tests.sh "${{ matrix.arch }}"
+      - name: Build release app
+        run: >-
+          xcodebuild -project Pastecap.xcodeproj -scheme Pastecap
+          -configuration Release -destination 'generic/platform=macOS'
+          ARCHS=${{ matrix.arch }} ONLY_ACTIVE_ARCH=NO
+          -derivedDataPath .build/ci-release build

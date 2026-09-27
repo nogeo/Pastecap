@@ -94,6 +94,8 @@ struct HistoryView: View {
 
             searchAndFilterBar
 
+            StorageErrorBanner(store: store)
+
             content
                 .frame(maxHeight: .infinity)
 
@@ -682,6 +684,30 @@ struct HistoryCardRow: View, Equatable {
     }
 }
 
+private struct StorageErrorBanner: View {
+    @ObservedObject var store: ClipboardStore
+
+    var body: some View {
+        if store.historySaveError != nil || store.imageSaveError != nil {
+            VStack(alignment: .leading, spacing: 5) {
+                if let message = store.historySaveError {
+                    Text(message)
+                    Button("重试保存") { store.retryHistorySave() }
+                }
+                if let message = store.imageSaveError {
+                    Text(message)
+                    Button("关闭提示") { store.dismissImageSaveError() }
+                }
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(Color.orange.opacity(0.12))
+        }
+    }
+}
+
 // MARK: - Modern Settings View
 
 struct SettingsView: View {
@@ -707,6 +733,8 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             // 设置顶部导航栏
             settingsHeader
+
+            StorageErrorBanner(store: store)
 
             Divider()
                 .opacity(0.5)

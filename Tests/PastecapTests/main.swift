@@ -425,6 +425,44 @@ private func testHotKeySettings() throws {
     try expect(kept.screenshot == custom, "user-customized shortcut must not be overwritten by migration")
 }
 
+private func testAnnotationExportCoordinates() throws {
+    _ = NSApplication.shared
+    for scale in [1, 2] {
+        let context = CGContext(data: nil, width: 400 * scale, height: 300 * scale,
+                                bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(NSColor.white.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 400 * scale, height: 300 * scale))
+        let selection = CGRect(x: 200, y: 150, width: 100, height: 80)
+        let path = NSBezierPath()
+        path.move(to: CGPoint(x: 220, y: 190))
+        path.line(to: CGPoint(x: 280, y: 190))
+        let style = AnnotationStyle(color: .red, thickness: .medium)
+        for annotation in [ScreenshotAnnotation.stroke(path, style),
+                           .rectangle(CGRect(x: 220, y: 170, width: 60, height: 20), style)] {
+            let image = ScreenshotRenderer.render(snapshot: context.makeImage()!,
+                viewSize: CGSize(width: 400, height: 300), selection: selection,
+                annotations: [annotation])!
+            guard let png = ImagePNG.data(from: image), let rep = NSBitmapImageRep(data: png) else {
+                throw TestFailure(description: "could not decode annotated PNG")
+            }
+            try expect(rep.pixelsWide == 100 * scale && rep.pixelsHigh == 80 * scale,
+                       "annotation export lost native resolution")
+            let color = rep.colorAt(x: 50 * scale, y: 40 * scale)!
+            try expect(color.redComponent > 0.8 && color.greenComponent < 0.2,
+                       "exported annotation missing at selection-relative position at \(scale)x: \(color)")
+            let background = rep.colorAt(x: 90 * scale, y: 70 * scale)!
+            try expect(background.redComponent > 0.9 && background.greenComponent > 0.9,
+                       "exported screenshot background not preserved")
+        }
+        try expect(path.element(at: 0) == .moveTo, "export mutated original pen path")
+        var points = [NSPoint](repeating: .zero, count: 3)
+        _ = path.element(at: 0, associatedPoints: &points)
+        try expect(points[0] == CGPoint(x: 220, y: 190), "export translated original pen path")
+    }
+}
+
 private func testAnnotationRendering() throws {
     _ = NSApplication.shared
     let colorSpace = CGColorSpaceCreateDeviceRGB()
@@ -666,6 +704,124 @@ private func testLongTextPreviewAndPersistence() throws {
     try expect(decoded.first?.text == "newest", "queued save overwrote the flushed snapshot")
 }
 
+private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition(), Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+    }
+    return condition()
+}
+
+private func testPNGFixture() throws -> Data {
+    let image = NSImage(size: NSSize(width: 8, height: 8))
+    image.lockFocus()
+    NSColor.systemBlue.setFill()
+    NSRect(x: 0, y: 0, width: 8, height: 8).fill()
+    image.unlockFocus()
+    guard let data = ImagePNG.data(from: image) else { throw TestFailure(description: "fixture encoding failed") }
+    return data
+}
+
+private func testClearDuringImageEncoding() throws {
+    let context = try TestContext()
+    defer { context.cleanup() }
+    let store = ClipboardStore(directory: context.directory, defaults: context.defaults)
+    let png = try testPNGFixture()
+    let gate = DispatchSemaphore(value: 0)
+    store.addPNG { _ = gate.wait(timeout: .now() + 5); return png }
+    store.clear()
+    gate.signal()
+    try expect(store.flush(), "clear during encoding failed to flush")
+    try expect(store.items.isEmpty, "cleared image reappeared after encoding")
+    let files = try FileManager.default.contentsOfDirectory(atPath: context.directory.path)
+    try expect(!files.contains { $0.hasSuffix(".png") }, "clear left an encoded image on disk")
+    store.addPNG { png }
+    try expect(store.flush() && store.items.count == 1, "clear invalidated subsequent image imports")
+}
+
+private func testClearDuringImageWrite() throws {
+    let context = try TestContext()
+    defer { context.cleanup() }
+    let written = DispatchSemaphore(value: 0)
+    let resume = DispatchSemaphore(value: 0)
+    let store = ClipboardStore(directory: context.directory, defaults: context.defaults, imageWriter: { data, url in
+        try data.write(to: url, options: .atomic)
+        written.signal()
+        _ = resume.wait(timeout: .now() + 5)
+    })
+    let png = try testPNGFixture()
+    store.addPNG { png }
+    var didWrite = false
+    try expect(waitUntil {
+        if !didWrite { didWrite = written.wait(timeout: .now()) == .success }
+        return didWrite
+    }, "image write never started")
+    store.clear()
+    resume.signal()
+    try expect(store.flush(), "clear during write failed to flush")
+    try expect(store.items.isEmpty, "cleared image reappeared after writing")
+    let files = try FileManager.default.contentsOfDirectory(atPath: context.directory.path)
+    try expect(!files.contains { $0.hasSuffix(".png") }, "cancelled image write left an orphan file")
+}
+
+private func testStorageFailuresAndRecovery() throws {
+    let context = try TestContext()
+    defer { context.cleanup() }
+    let store = ClipboardStore(directory: context.directory, defaults: context.defaults)
+    let png = try testPNGFixture()
+    try FileManager.default.removeItem(at: context.directory)
+    store.addPNG { png }
+    try expect(!store.flush(), "failed image write reported success")
+    try expect(store.items.isEmpty && store.imageSaveError != nil, "failed image write created a record or hid the error")
+    store.addText("must survive retry")
+    try expect(!store.flush() && store.historySaveError != nil, "failed history write was not reported")
+    try expect(store.items.first?.text == "must survive retry", "save failure discarded in-memory history")
+    try FileManager.default.createDirectory(at: context.directory, withIntermediateDirectories: true)
+    store.retryHistorySave()
+    try expect(waitUntil { store.historySaveError == nil }, "history retry did not recover")
+    try expect(store.imageSaveError != nil, "history retry hid an unrelated image failure")
+    let data = try Data(contentsOf: context.directory.appendingPathComponent("history.json"))
+    let restored = try JSONDecoder().decode([ClipboardItem].self, from: data)
+    try expect(restored.first?.text == "must survive retry", "retry lost the latest history")
+    store.addPNG { png }
+    try expect(store.flush() && store.imageSaveError == nil, "new image import did not recover")
+    try expect(store.items.count == 2 && store.image(for: store.items[0]) != nil, "recovered image was not readable")
+}
+
+private func testScreenshotUniqueFiles() throws {
+    let context = try TestContext()
+    defer { context.cleanup() }
+    let now = Date()
+    let names = (0..<100).map { _ in ScreenshotDestination.fileName(at: now) }
+    try expect(Set(names).count == 100, "same-second screenshot names collide")
+    let first = try ScreenshotDestination.savePNG(Data([1]), in: context.directory)
+    let second = try ScreenshotDestination.savePNG(Data([2]), in: context.directory)
+    let firstData = try Data(contentsOf: first)
+    let secondData = try Data(contentsOf: second)
+    try expect(first != second && firstData == Data([1]) && secondData == Data([2]), "screenshot save overwrote a prior file")
+}
+
+private func testClipboardMonitorPolling() throws {
+    let context = try TestContext()
+    defer { context.cleanup() }
+    let store = ClipboardStore(directory: context.directory, defaults: context.defaults)
+    let board = NSPasteboard.withUniqueName()
+    defer { board.releaseGlobally() }
+    let monitor = ClipboardMonitor(store: store, pasteboard: board)
+    // Exercise the public polling path without any private hook delivering events.
+    monitor.start(useChangeHook: false)
+    defer { monitor.stop() }
+    board.clearContents()
+    board.setString("polled text", forType: .string)
+    try expect(waitUntil(timeout: 3) { store.items.first?.text == "polled text" }, "running monitor did not capture pasteboard changes")
+    monitor.stop()
+    board.clearContents()
+    board.setString("after stop", forType: .string)
+    RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+    try expect(store.items.first?.text == "polled text", "stopped monitor continued capturing")
+    store.flush()
+}
+
 private func testSupportDirectoryName() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("PastecapSupport-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -690,10 +846,16 @@ do {
     try testScreenCaptureAuthorization()
     try testSaveDirectoryResolution()
     try testHotKeySettings()
+    try testAnnotationExportCoordinates()
     try testAnnotationRendering()
     try testPixelColorSampling()
     try testHistoryKeyboardNav()
     try testLongTextPreviewAndPersistence()
+    try testClearDuringImageEncoding()
+    try testClearDuringImageWrite()
+    try testStorageFailuresAndRecovery()
+    try testScreenshotUniqueFiles()
+    try testClipboardMonitorPolling()
     try testSupportDirectoryName()
     try testSmartItemDetection()
     print("PASS: \(passed) assertions")

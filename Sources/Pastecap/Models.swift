@@ -342,6 +342,8 @@ enum ImagePNG {
 final class ClipboardStore: ObservableObject {
     static let internalPasteboardType = NSPasteboard.PasteboardType("com.wwm.Pastecap.internal-copy")
     @Published private(set) var items: [ClipboardItem] = []
+    @Published private(set) var historySaveError: String?
+    @Published private(set) var imageSaveError: String?
     @Published var maxItems: Int {
         didSet {
             defaults.set(maxItems, forKey: "maxItems")
@@ -352,10 +354,13 @@ final class ClipboardStore: ObservableObject {
     private let directory: URL
     private let indexURL: URL
     private let defaults: UserDefaults
+    private let imageWriter: (Data, URL) throws -> Void
     private let ioQueue = DispatchQueue(label: "com.wwm.Pastecap.store-io", qos: .utility)
     private let saveQueue = DispatchQueue(label: "com.wwm.Pastecap.history-save", qos: .utility)
     private var saveWorkItem: DispatchWorkItem?
     private var pendingImageOps = 0
+    private var imageGeneration = UUID()
+    private var saveRevision: UInt64 = 0
     private let thumbnailQueue = DispatchQueue(label: "com.wwm.Pastecap.thumbnails", qos: .userInitiated)
     private let thumbnailCache = NSCache<NSString, NSImage>()
     private var thumbnailKeys: [String: Set<String>] = [:]
@@ -366,8 +371,10 @@ final class ClipboardStore: ObservableObject {
         base.appendingPathComponent("Pastecap", isDirectory: true)
     }
 
-    init(directory customDirectory: URL? = nil, defaults: UserDefaults = .standard) {
+    init(directory customDirectory: URL? = nil, defaults: UserDefaults = .standard,
+         imageWriter: @escaping (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) {
         self.defaults = defaults
+        self.imageWriter = imageWriter
         let base = customDirectory ?? Self.supportDirectory()
         directory = base
         indexURL = directory.appendingPathComponent("history.json")
@@ -392,7 +399,10 @@ final class ClipboardStore: ObservableObject {
         let snapshot = items
         let destination = indexURL
         saveQueue.sync {
-            if hasPendingSave { Self.writeHistory(snapshot, to: destination) }
+            if hasPendingSave {
+                do { try Self.writeHistory(snapshot, to: destination) }
+                catch { NSLog("Pastecap: history save failed: %@", error.localizedDescription) }
+            }
         }
     }
 
@@ -409,15 +419,22 @@ final class ClipboardStore: ObservableObject {
 
     func addPNG(_ provider: @escaping () -> Data?, preferredName: String? = nil) {
         pendingImageOps += 1
+        let generation = imageGeneration
         ioQueue.async { [weak self] in
             guard let self else { return }
             guard let png = provider() else {
-                DispatchQueue.main.async { self.finishImageOp() }
+                DispatchQueue.main.async {
+                    if self.imageGeneration == generation {
+                        self.imageSaveError = "图片编码失败，请重新复制图片。"
+                    }
+                    self.finishImageOp()
+                }
                 return
             }
             let fingerprint = self.fingerprint(prefix: "image", data: png)
             DispatchQueue.main.async {
-                if self.items.contains(where: { $0.fingerprint == fingerprint }) {
+                guard self.imageGeneration == generation,
+                      !self.items.contains(where: { $0.fingerprint == fingerprint }) else {
                     self.finishImageOp()
                     return
                 }
@@ -425,30 +442,40 @@ final class ClipboardStore: ObservableObject {
                 let shownName = Self.imageDisplayName(preferredName)
                 let url = self.directory.appendingPathComponent(name)
                 self.ioQueue.async {
-                    try? png.write(to: url, options: .atomic)
+                    let result = Result { try self.imageWriter(png, url) }
                     DispatchQueue.main.async {
-                        if self.items.contains(where: { $0.fingerprint == fingerprint }) {
-                            try? FileManager.default.removeItem(at: url)
-                            self.finishImageOp()
+                        // clear() also invalidates writes already in progress.
+                        guard self.imageGeneration == generation,
+                              !self.items.contains(where: { $0.fingerprint == fingerprint }) else {
+                            self.ioQueue.async {
+                                try? FileManager.default.removeItem(at: url)
+                                DispatchQueue.main.async { self.finishImageOp() }
+                            }
                             return
                         }
                         self.finishImageOp {
-                            self.add(ClipboardItem(
-                                id: UUID(),
-                                kind: .image,
-                                text: nil,
-                                fileName: name,
-                                displayName: shownName,
-                                createdAt: Date(),
-                                fingerprint: fingerprint,
-                                byteCount: Int64(png.count)
-                            ))
+                            switch result {
+                            case .success:
+                                self.imageSaveError = nil
+                                self.add(ClipboardItem(
+                                    id: UUID(), kind: .image, text: nil,
+                                    fileName: name, displayName: shownName,
+                                    createdAt: Date(), fingerprint: fingerprint,
+                                    byteCount: Int64(png.count)
+                                ))
+                            case .failure(let error):
+                                self.imageSaveError = "图片未保存：\(error.localizedDescription) 请检查存储位置后重新复制。"
+                            }
                         }
                     }
                 }
             }
         }
     }
+
+    func dismissImageSaveError() { imageSaveError = nil }
+
+    func retryHistorySave() { saveNow() }
 
     func image(for item: ClipboardItem) -> NSImage? {
         guard let name = item.fileName else { return nil }
@@ -507,6 +534,8 @@ final class ClipboardStore: ObservableObject {
     }
 
     func clear() {
+        imageGeneration = UUID()
+        imageSaveError = nil
         items.forEach {
             invalidateThumbnail(for: $0)
             deleteFile($0)
@@ -525,14 +554,21 @@ final class ClipboardStore: ObservableObject {
         }
     }
 
-    /// Waits for in-flight image encodes and writes history to disk immediately.
-    func flush(timeout: TimeInterval = 5) {
+    /// Wait for image operations, then persist the latest snapshot after queued saves.
+    @discardableResult
+    func flush(timeout: TimeInterval = 5) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while pendingImageOps > 0, Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
-        saveNow()
-        saveQueue.sync {}
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
+        saveRevision &+= 1
+        let snapshot = items
+        let destination = indexURL
+        let result = saveQueue.sync { Result { try Self.writeHistory(snapshot, to: destination) } }
+        applySaveResult(result)
+        return pendingImageOps == 0 && historySaveError == nil && imageSaveError == nil
     }
 
     private func finishImageOp(_ body: () -> Void = {}) {
@@ -611,6 +647,7 @@ final class ClipboardStore: ObservableObject {
     }
 
     private func scheduleSave() {
+        saveRevision &+= 1
         saveWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.saveNow() }
         saveWorkItem = work
@@ -620,14 +657,30 @@ final class ClipboardStore: ObservableObject {
     private func saveNow() {
         saveWorkItem?.cancel()
         saveWorkItem = nil
+        saveRevision &+= 1
+        let revision = saveRevision
         let snapshot = items
         let destination = indexURL
-        saveQueue.async { Self.writeHistory(snapshot, to: destination) }
+        saveQueue.async { [weak self] in
+            let result = Result { try Self.writeHistory(snapshot, to: destination) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.saveRevision == revision else { return }
+                self.applySaveResult(result)
+            }
+        }
     }
 
-    private static func writeHistory(_ snapshot: [ClipboardItem], to destination: URL) {
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: destination, options: .atomic)
+    private func applySaveResult(_ result: Result<Void, Error>) {
+        switch result {
+        case .success: historySaveError = nil
+        case .failure(let error):
+            historySaveError = "历史记录未保存：\(error.localizedDescription) 当前记录仍保留在内存中。"
+        }
+    }
+
+    private static func writeHistory(_ snapshot: [ClipboardItem], to destination: URL) throws {
+        let data = try JSONEncoder().encode(snapshot)
+        try data.write(to: destination, options: .atomic)
     }
 
     private static func makeThumbnail(at url: URL, maxPixels: Int) -> CGImage? {
@@ -689,12 +742,16 @@ final class ClipboardMonitor {
         stop()
     }
 
-    func start() {
+    func start(useChangeHook: Bool = true) {
         guard !running else { return }
         running = true
-        PasteboardChangeHook.onChange = { [weak self] in self?.check() }
-        if PasteboardChangeHook.install() { return }
-        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.check() }
+        if useChangeHook {
+            PasteboardChangeHook.onChange = { [weak self] in self?.check() }
+        }
+        // A private hook can install successfully yet stop delivering on an OS update.
+        // Always keep a public changeCount poll as a fallback.
+        let interval: TimeInterval = (useChangeHook && PasteboardChangeHook.install()) ? 1.0 : 0.25
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.check() }
         timer.tolerance = 0.1
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer

@@ -139,6 +139,17 @@ enum ScreenCaptureAuthorization {
 // MARK: - Save destination
 
 enum ScreenshotDestination {
+    static func fileName(at date: Date = Date()) -> String {
+        "Screenshot-\(Int(date.timeIntervalSince1970))-\(UUID().uuidString).png"
+    }
+
+    static func savePNG(_ png: Data, in folder: URL) throws -> URL {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent(fileName())
+        try png.write(to: url, options: .atomic)
+        return url
+    }
+
     static func resolveSaveDirectory(defaults: UserDefaults = .standard) -> URL {
         let fallback = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Pictures", isDirectory: true)
@@ -244,7 +255,10 @@ enum ScreenshotRenderer {
     /// were drawn on, so mosaics stay aligned.
     static func draw(_ annotation: ScreenshotAnnotation, offset: CGPoint, pixelated: (CGFloat) -> NSImage?) {
         switch annotation {
-        case .stroke(let path, let style):
+        case .stroke(let originalPath, let style):
+            let path = originalPath.copy() as! NSBezierPath
+            let translation = AffineTransform(translationByX: offset.x, byY: offset.y)
+            path.transform(using: translation)
             style.color.setStroke()
             path.lineWidth = style.thickness.strokeWidth
             path.lineCapStyle = .round
@@ -731,11 +745,14 @@ final class PinnedScreenshotView: NSView {
 
     @objc private func saveImage() {
         let savePanel = NSSavePanel()
-        savePanel.nameFieldStringValue = "Screenshot-\(Int(Date().timeIntervalSince1970)).png"
+        savePanel.nameFieldStringValue = ScreenshotDestination.fileName()
         savePanel.directoryURL = ScreenshotDestination.resolveSaveDirectory()
         NSApp.activate(ignoringOtherApps: true)
         if savePanel.runModal() == .OK, let url = savePanel.url {
-            try? ImagePNG.data(from: image)?.write(to: url, options: .atomic)
+            do {
+                guard let png = ImagePNG.data(from: image) else { throw CocoaError(.fileWriteUnknown) }
+                try png.write(to: url, options: .atomic)
+            } catch { NSAlert(error: error).runModal() }
         }
     }
 
@@ -1206,17 +1223,18 @@ final class CaptureView: NSView {
     }
 
     private func renderedResult() -> NSImage? {
-        ScreenshotRenderer.render(snapshot: snapshotCG, viewSize: bounds.size, selection: selection, annotations: annotations)
+        commitTextEditing()
+        return ScreenshotRenderer.render(snapshot: snapshotCG, viewSize: bounds.size, selection: selection, annotations: annotations)
     }
 
     private func save(_ image: NSImage) -> Bool {
         let folder = ScreenshotDestination.resolveSaveDirectory()
         do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            guard let png = ImagePNG.data(from: image) else { return false }
-            try png.write(to: folder.appendingPathComponent("Screenshot-\(Int(Date().timeIntervalSince1970)).png"), options: .atomic)
+            guard let png = ImagePNG.data(from: image) else { throw CocoaError(.fileWriteUnknown) }
+            _ = try ScreenshotDestination.savePNG(png, in: folder)
             return true
         } catch {
+            NSAlert(error: error).runModal()
             return false
         }
     }

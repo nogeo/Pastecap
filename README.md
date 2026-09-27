@@ -123,6 +123,15 @@ Debug 使用本机的 `Pastecap Local` 证书，开发包固定输出到 `.build
 
 ---
 
+## v0.2.5 更新
+
+- 修复截图画笔标注导出时丢失，完成操作前自动提交文字标注。
+- 修复清空历史与后台图片保存之间的竞态，增加保存失败提示和重试。
+- 截图保存使用唯一文件名，剪贴板监听增加轮询兜底。
+- 增加 ARM、Intel 双架构自动测试和发布前检查。
+
+完整说明见 [v0.2.5 发布说明](docs/releases/v0.2.5.md)。
+
 ## v0.2.4 更新
 
 - 新增 64 位 Intel（x86_64）独立 DMG，保留 Apple Silicon（arm64）独立 DMG，两者均要求 macOS 14 或更新版本。
@@ -133,6 +142,12 @@ Debug 使用本机的 `Pastecap Local` 证书，开发包固定输出到 `.build
 
 完整说明见 [v0.2.4 发布说明](docs/releases/v0.2.4.md)。
 
+## 自动化与兼容性验证
+
+每次推送到 `main` 或创建 PR，CI 会分别在 ARM 和 64 位 Intel runner 上运行测试并构建 Release 应用；标签发布需等待两种架构的检查通过。
+
+测试覆盖清空历史期间的后台图片操作、磁盘写入失败与恢复、截图文件名唯一性、剪贴板轮询，以及已有功能。屏幕录制授权、全局快捷键和多显示器交互仍需按 [安装与硬件回归清单](docs/fresh-install-test.md) 实机验证。
+
 ## 🚀 GitHub Release 自动发布
 
 向仓库推送一个 `v*` 格式的 tag，GitHub Actions 会自动编译 `Pastecap-arm64.dmg` 和 `Pastecap-x86_64.dmg` 并挂载发布到 [Releases](https://github.com/nogeo/Pastecap/releases)：
@@ -140,8 +155,8 @@ Debug 使用本机的 `Pastecap Local` 证书，开发包固定输出到 `.build
 发布前更新 `Packaging/Info.plist` 的版本号，并添加与标签同名的 `docs/releases/<tag>.md`；自动发布会使用该文件作为 Release 说明。
 
 ```sh
-git tag -a v0.2.4 -m "Release v0.2.4"
-git push origin main v0.2.4
+git tag -a v0.2.5 -m "Release v0.2.5"
+git push origin main v0.2.5
 ```
 
 ---
