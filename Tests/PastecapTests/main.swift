@@ -99,7 +99,7 @@ private func testImagePersistenceAndDeduplication() throws {
     try expect(thumbnailFinished && loadedThumbnail != nil, "async thumbnail could not be generated")
     try expect(loadedThumbnail === cachedThumbnail, "thumbnail cache did not reuse the image")
     if let rep = loadedThumbnail?.representations.first {
-        try expect(rep.pixelsWide == 108 && rep.pixelsHigh == 54, "thumbnail downsampling did not preserve size and aspect ratio")
+        try expect(rep.pixelsWide == 108 && rep.pixelsHigh == 54, "thumbnail downsampling did not preserve size and aspect ratio: expected 108x54, got \(rep.pixelsWide)x\(rep.pixelsHigh), logical size \(loadedThumbnail!.size), representation \(type(of: rep))")
     }
     store.flush()
     try expect(ClipboardStore(directory: context.directory, defaults: context.defaults).items.count == 1, "image did not survive restart")
