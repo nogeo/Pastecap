@@ -98,9 +98,15 @@ private func testImagePersistenceAndDeduplication() throws {
     }
     try expect(thumbnailFinished && loadedThumbnail != nil, "async thumbnail could not be generated")
     try expect(loadedThumbnail === cachedThumbnail, "thumbnail cache did not reuse the image")
-    if let rep = loadedThumbnail?.representations.first {
-        try expect(rep.pixelsWide == 108 && rep.pixelsHigh == 54, "thumbnail downsampling did not preserve size and aspect ratio: expected 108x54, got \(rep.pixelsWide)x\(rep.pixelsHigh), logical size \(loadedThumbnail!.size), representation \(type(of: rep))")
+    guard let rep = loadedThumbnail?.representations.first as? NSBitmapImageRep else {
+        throw TestFailure(description: "thumbnail must retain an explicit bitmap representation")
     }
+    try expect(rep.pixelsWide == 108 && rep.pixelsHigh == 54,
+               "thumbnail downsampling: expected 108x54 pixels, got \(rep.pixelsWide)x\(rep.pixelsHigh)")
+    try expect(loadedThumbnail?.size == NSSize(width: 54, height: 27),
+               "thumbnail display size must remain 54x27 points at 2x")
+    try expect(rep.colorAt(x: 54, y: 27)!.redComponent > 0.5,
+               "thumbnail bitmap lost source image content")
     store.flush()
     try expect(ClipboardStore(directory: context.directory, defaults: context.defaults).items.count == 1, "image did not survive restart")
     try expect(store.cacheSizeBytes() > 0, "cache size did not include persisted files")

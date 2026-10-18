@@ -504,9 +504,13 @@ final class ClipboardStore: ObservableObject {
         guard !Task.isCancelled, items.contains(where: { $0.id == item.id }),
               let decoded else { return nil }
         if let cached = thumbnailCache.object(forKey: key) { return cached }
-        let thumb = NSImage(cgImage: decoded, size: NSSize(
-            width: CGFloat(decoded.width) / scale, height: CGFloat(decoded.height) / scale
-        ))
+        // Keep the decoded pixels explicit. NSCGImageSnapshotRep can report
+        // display-sized dimensions on 1x/headless hosts instead of native pixels.
+        let representation = NSBitmapImageRep(cgImage: decoded)
+        representation.size = NSSize(width: CGFloat(decoded.width) / scale,
+                                     height: CGFloat(decoded.height) / scale)
+        let thumb = NSImage(size: representation.size)
+        thumb.addRepresentation(representation)
         thumbnailCache.setObject(thumb, forKey: key)
         thumbnailKeys[name, default: []].insert(key as String)
         return thumb

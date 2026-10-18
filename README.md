@@ -123,6 +123,13 @@ Debug 使用本机的 `Pastecap Local` 证书，开发包固定输出到 `.build
 
 ---
 
+## v0.2.6 更新
+
+- 修复缩略图在 CI 环境中的像素尺寸表示差异，恢复双架构发布流程。
+- 包含 v0.2.5 的全部修复；v0.2.5 标签未产出正式安装包。
+
+完整说明见 [v0.2.6 发布说明](docs/releases/v0.2.6.md)。
+
 ## v0.2.5 更新
 
 - 修复截图画笔标注导出时丢失，完成操作前自动提交文字标注。
@@ -155,8 +162,8 @@ Debug 使用本机的 `Pastecap Local` 证书，开发包固定输出到 `.build
 发布前更新 `Packaging/Info.plist` 的版本号，并添加与标签同名的 `docs/releases/<tag>.md`；自动发布会使用该文件作为 Release 说明。
 
 ```sh
-git tag -a v0.2.5 -m "Release v0.2.5"
-git push origin main v0.2.5
+git tag -a v0.2.6 -m "Release v0.2.6"
+git push origin main v0.2.6
 ```
 
 ---
