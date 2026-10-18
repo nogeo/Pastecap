@@ -54,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onCancel: { [weak self] in self?.popover.performClose(nil) }
         ))
         installQuitMonitor()
+        // Give every cold launch a visible entry point, not just a status-bar icon.
+        DispatchQueue.main.async { [weak self] in self?.showPopover() }
     }
 
     /// LSUIElement 没有菜单栏，系统 ⌘Q 到不了 Quit；本地拦截后主动退出。
@@ -87,10 +89,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.deactivate()
     }
 
-    /// 菜单栏应用没有常规窗口：拒绝系统在激活/启动时自动打开的窗口，
-    /// 避免弹出空白的 Settings 窗口（如安装后从 Finder 打开时）。
+    /// 不创建系统默认的空白窗口；显式打开请求展示历史面板。
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { false }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // Finder/Dock reopen events are explicit requests to see the application.
+        // Defer until startup has finished creating the popover and status item.
+        DispatchQueue.main.async { [weak self] in self?.showPopover() }
+        return false
+    }
     func applicationShouldSaveSecureApplicationState(_ app: NSApplication) -> Bool { false }
     func applicationShouldRestoreSecureApplicationState(_ app: NSApplication) -> Bool { false }
 
